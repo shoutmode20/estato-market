@@ -1,0 +1,11 @@
+{
+  "name": "estato-app",
+  "version": "10.0.0",
+  "description": "Estato — Premium Real Estate Marketplace with Google Drive Sync",
+  "scripts": {
+    "start": "npx serve . --listen 3000",
+    "dev": "npx serve . --listen 3000"
+  },
+  "keywords": ["real-estate", "google-drive", "pwa"],
+  "license": "MIT"
+}

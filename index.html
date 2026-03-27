@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Estato is a premium, high-performance real estate marketplace for discovering, comparing, and tracking top properties natively in your browser.">
+    <meta property="og:title" content="Estato | Premium Real Estate Marketplace">
+    <meta property="og:description" content="Discover, compare, and connect with sellers securely on Estato.">
+    <meta property="og:image" content="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?q=80&w=1200&auto=format&fit=crop">
+    <meta property="og:type" content="website">
+    <meta name="theme-color" content="#ea580c">
+    <title>Estato | Premium Real Estate Marketplace</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- PDF Generation libs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- PWA Config -->
+    <link rel="manifest" href="./manifest.json">
+    
+    <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/buildings.png">
+    <!-- Styles -->
+    <!-- Leaflet Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="./css/styles.css?v=12">
+</head>
+<body>
+
+    <!-- Unified Google Sign-In Screen -->
+    <div id="loginScreen" class="auth-overlay">
+        <div class="auth-card">
+            <div class="auth-header">
+                <i class="ph-duotone ph-buildings" style="font-size: 3rem; color: var(--primary); margin-bottom: 1rem;"></i>
+                <h1>Estato</h1>
+                <p>Premium Real Estate Marketplace</p>
+            </div>
+            
+            <div style="margin-bottom: 2rem;">
+                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem; text-align: center;">Choose your view (for first-time setup):</p>
+                <div class="role-selector" id="loginRoleSelector" style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+                    <div class="role-card" data-role="Buyer" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
+                        <i class="ph ph-identification-card" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
+                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Buyer</span>
+                        <small style="font-size: 0.75rem; opacity: 0.8;">Browse & Buy</small>
+                    </div>
+                    <div class="role-card active" data-role="Seller" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
+                        <i class="ph ph-house-line" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
+                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Seller</span>
+                        <small style="font-size: 0.75rem; opacity: 0.8;">List & Sell</small>
+                    </div>
+                    <div class="role-card" data-role="Admin" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
+                        <i class="ph ph-shield-check" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
+                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Admin</span>
+                        <small style="font-size: 0.75rem; opacity: 0.8;">Full Access</small>
+                    </div>
+                </div>
+                <input type="hidden" id="selectedRole" value="Seller">
+            </div>
+
+            <div style="display: flex; justify-content: center; margin-top: 1rem; gap: 1rem;">
+                <button class="btn btn-primary w-full" id="googleLoginBtn" style="padding: 1.25rem; font-size: 1.1rem; gap: 0.75rem; display: flex; align-items: center; justify-content: center;">
+                    <i class="ph ph-google-logo"></i> Sign in with Google
+                </button>
+                <button class="btn btn-secondary w-full" id="devLoginBtn" style="padding: 1.25rem; font-size: 1.1rem; gap: 0.75rem; display: flex; align-items: center; justify-content: center;">
+                    <i class="ph ph-code"></i> Dev Login
+                </button>
+            </div>
+
+            <p style="text-align: center; font-size: 0.75rem; color: var(--text-muted); margin-top: 2rem; padding: 0 1rem;">
+                Your data is securely stored in your Google Drive (`estato_data.json`).
+            </p>
+            <p id="loginErrorMsg" class="form-error" style="margin-top: 1rem; text-align: center;"></p>
+        </div>
+    </div>
+
+    <!-- Data Hydration Loading Overlay -->
+    <div id="loadingOverlay" class="auth-overlay hidden" style="background: rgba(253, 251, 247, 0.95); z-index: 2000;">
+        <div class="loading-content" style="text-align: center;">
+            <div class="spinner" style="width: 50px; height: 50px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1.5rem;"></div>
+            <h2>Hydrating Estato...</h2>
+            <p style="color: var(--text-muted);">Syncing with your Google Drive</p>
+        </div>
+    </div>
+
+
+    <!-- Core Application Container (Hidden until Auth succeeds) -->
+    <div id="appContainer" class="app-container hidden">
+        
+        <!-- Navigation Sidebar -->
+        <aside class="sidebar surface-panel">
+            <div class="logo">
+                <i class="ph-duotone ph-buildings"></i>
+                <h2>Estato</h2>
+            </div>
+            
+            <ul class="nav-links">
+                <li class="nav-item active admin-only" data-view="dashboard">
+                    <i class="ph ph-squares-four"></i>
+                    <span>Dashboard</span>
+                </li>
+                <li class="nav-item" data-view="properties">
+                    <i class="ph ph-house"></i>
+                    <span>All Properties</span>
+                </li>
+                <li class="nav-item admin-only" data-view="cities">
+                    <i class="ph ph-map-pin"></i>
+                    <span>Service Areas</span>
+                </li>
+                <li class="nav-item admin-only" data-view="messages">
+                    <i class="ph ph-envelope"></i>
+                    <span>Inbound Leads</span>
+                </li>
+                <li class="nav-item" data-view="watchlist">
+                    <i class="ph ph-heart"></i>
+                    <span>Saved Properties</span>
+                </li>
+
+                <div class="title-divider">Account</div>
+                <li class="nav-item" data-view="profile">
+                    <i class="ph ph-user-circle"></i>
+                    <span>My Profile</span>
+                </li>
+            </ul>
+
+            <div class="add-btn-container admin-only">
+                <button class="btn btn-primary w-full shadow-hover" id="openAddModalBtn">
+                    <i class="ph ph-plus"></i> Add Listing
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Display Pane -->
+        <main class="main-content">
+            <header class="topbar surface-panel">
+                <div class="search-bar">
+                    <i class="ph ph-magnifying-glass"></i>
+                    <input type="text" id="searchInput" placeholder="Search by city, title or address...">
+                </div>
+                
+                <!-- View Toggle V11 -->
+                <div class="view-toggle-pills" style="display: flex; background: var(--bg-main); padding: 0.25rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-left: 1rem;">
+                    <button class="toggle-pill active" id="viewGridBtn" title="Grid View" style="border:none; background:none; padding: 0.25rem 0.5rem; cursor:pointer;"><i class="ph ph-grid-four"></i></button>
+                    <button class="toggle-pill" id="viewMapBtn" title="Map View" style="border:none; background:none; padding: 0.25rem 0.5rem; cursor:pointer;"><i class="ph ph-map-trifold"></i></button>
+                </div>
+                <div class="user-profile">
+                    <div class="notification-container" style="position: relative; margin-right: 1.5rem;">
+                        <div id="notificationBell" class="notification-bell" title="Notifications">
+                            <i class="ph-duotone ph-bell"></i>
+                            <span id="notifBadge" class="notif-badge hidden">0</span>
+                        </div>
+                        <div id="notifDropdown" class="notif-dropdown hidden">
+                            <div class="notif-header">
+                                <h3>Notifications</h3>
+                                <button id="markReadBtn" class="text-btn">Mark all as read</button>
+                            </div>
+                            <div id="notifList" class="notif-list">
+                                <!-- Notifications injected here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div id="syncBadge" class="sync-badge sync-synced" title="Google Drive Sync Status">
+                        <i class="ph ph-check-circle"></i><span>Synced</span>
+                    </div>
+                    <div class="user-greeting">
+                        <span id="headerGreetingText">Hello, User!</span>
+                        <span id="headerRoleBadge" class="user-role-badge">Seller</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Main Views Container — properties grid/map are injected here by renderProperties() -->
+            <div id="viewContainer" class="view-content"></div>
+
+            <!-- Comparison Tray V11 -->
+            <div id="compareTray" class="compare-tray hidden">
+                <div class="tray-content">
+                    <div class="tray-label">
+                        <i class="ph-duotone ph-equals"></i>
+                        <span>Compare Properties (<span id="compareCount">0</span>)</span>
+                    </div>
+                    <div id="compareListTray" class="compare-list-pills"></div>
+                    <div class="tray-actions">
+                        <button class="btn btn-primary" id="startCompareBtn">Compare Now</button>
+                        <button class="btn btn-icon" id="clearCompareBtn" title="Clear All"><i class="ph ph-trash"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Comparison Modal V11 -->
+            <div id="compareModal" class="modal-overlay">
+                <div class="modal comparison-modal" style="max-width: 950px; background: white;">
+                    <div class="modal-header">
+                        <h3>Side-by-Side Comparison</h3>
+                        <button class="close-btn" id="closeCompareModal">&times;</button>
+                    </div>
+                    <div class="modal-body" id="comparisonTableContainer" style="overflow-x: auto; padding: 0;">
+                        <!-- JS generated table -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Mobile Specific Floating Action Button (Owners only) -->
+            <button class="mobile-fab admin-only" id="mobileAddBtn">
+                <i class="ph ph-plus"></i>
+            </button>
+            
+        </main>
+    </div>
+
+    <!-- Data Injection Modal Form (Used strictly by Owners) -->
+    <div class="modal-overlay" id="propertyModal">
+        <div class="modal surface-panel">
+            <div class="modal-header">
+                <h3 id="modalTitle">Add New Listing</h3>
+                <button class="close-btn" id="closeModalBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="propertyForm">
+                    <input type="hidden" id="propId">
+                    <input type="hidden" id="propImage">
+                    
+                    <div class="image-upload-area" style="margin-bottom: 1.5rem;">
+                        <label>Property Photos (Max 5)</label>
+                        <input type="file" id="propImageFile" accept="image/*" multiple class="w-full">
+                        <div id="imagePreviewContainer" style="display: none; margin-top: 1rem; border-radius: var(--radius-sm); overflow-x: auto; white-space: nowrap; height: 100px; gap: 10px; padding: 0.5rem; background: var(--bg-hover);">
+                            <!-- Previews injected here -->
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Listing Title</label>
+                        <input type="text" id="propTitle" required placeholder="e.g. Luxury Sea-facing Penthouse">
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Property Category</label>
+                            <select id="propCategory" required></select>
+                        </div>
+                        <div class="form-group half">
+                            <label>Property Type</label>
+                            <select id="propType" required></select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Status</label>
+                            <select id="propStatus" required></select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>BHK Layout</label>
+                            <select id="propBhk" required></select>
+                        </div>
+                        <div class="form-group half">
+                            <label>Area (Sq.Ft.)</label>
+                            <input type="number" id="propArea" required placeholder="1500" min="100">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Value (₹)</label>
+                            <input type="number" id="propPrice" required placeholder="e.g. 5000000">
+                        </div>
+                        <div class="form-group half">
+                            <label>City Region</label>
+                            <input type="text" id="propCity" required list="citiesList" placeholder="e.g. Mumbai">
+                            <datalist id="citiesList"></datalist>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Full Address</label>
+                            <input type="text" id="propAddress" required placeholder="e.g. 10 Marine Drive">
+                        </div>
+                        <div class="form-group half">
+                            <label>Area PIN Code <span style="color: var(--danger); font-size: 0.8rem;">*required</span></label>
+                            <input type="text" id="propPinCode" required placeholder="e.g. 400020" maxlength="6" pattern="[0-9]{6}" title="Enter a valid 6-digit PIN code">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Property Location Coordinates <span style="color: var(--danger); font-size: 0.8rem;">*required</span></label>
+                        <div style="display: flex; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap;">
+                            <input type="number" id="propLat" required step="any" placeholder="Latitude (e.g. 19.0760)" style="flex: 1; min-width: 140px;">
+                            <input type="number" id="propLng" required step="any" placeholder="Longitude (e.g. 72.8777)" style="flex: 1; min-width: 140px;">
+                            <button type="button" id="useMyLocationBtn" class="btn btn-secondary shadow-hover" style="white-space: nowrap; flex-shrink: 0;" title="Auto-fill from your current GPS position">
+                                <i class="ph ph-map-pin"></i> Use My Location
+                            </button>
+                        </div>
+                        <div id="locationHelpText" style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="ph ph-magnifying-glass"></i>
+                            <span>Search for a place (e.g., 'Bandra West, Mumbai') or paste a Maps link:</span>
+                        </div>
+                        <div style="position: relative;">
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                                <input type="text" id="propLocationSearch" placeholder="Type a location to search..." style="flex: 1; font-size: 0.85rem;" autocomplete="off">
+                                <button type="button" id="searchLocationBtn" class="btn btn-secondary shadow-hover" style="white-space: nowrap;">Search</button>
+                            </div>
+                            <ul id="locationSuggestions" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-sm); max-height: 250px; overflow-y: auto; z-index: 1000; list-style: none; padding: 0; margin-top: 4px; box-shadow: var(--shadow-md);"></ul>
+                        </div>
+                        <div id="modalMap" style="height: 250px; width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-top: 1rem; z-index: 1; background-color: var(--bg-hover);"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Property Description & Keywords</label>
+                        <textarea id="propDescription" rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention amenities (Pool, Gym), nearby landmarks, or special features for better search discovery..."></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Property</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Compare Tray -->
+    <div id="compareTray" class="compare-tray" style="position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%) translateY(150%); background: var(--bg-surface); padding: 1rem 1.5rem; border-radius: var(--radius-lg); box-shadow: 0 10px 25px rgba(0,0,0,0.1); z-index: 100; display: flex; align-items: center; gap: 1.5rem; border: 1px solid var(--border-color); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);">
+        <div style="display: flex; flex-direction: column;">
+            <span style="font-weight: 700; color: var(--text-main);">Compare Properties</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);"><span id="compareCount">0</span> Selected</span>
+        </div>
+        <div id="compareListTray" style="display: flex; gap: 0.5rem; align-items: center;"></div>
+        <button class="btn btn-primary shadow-hover" onclick="window.renderComparisonTable()" style="white-space: nowrap;">Compare Now</button>
+    </div>
+
+    <!-- Comparison Table Modal -->
+    <div class="modal-overlay" id="compareModal">
+        <div class="modal surface-panel" style="max-width: 900px; width: 95%;">
+            <div class="modal-header">
+                <div>
+                    <h3>Property Comparison</h3>
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Side-by-side analysis</p>
+                </div>
+                <button class="close-btn" id="closeCompareBtn" onclick="document.getElementById('compareModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 0; overflow-x: auto; background: var(--bg-main);">
+                <div id="comparisonTableContainer" style="min-width: 600px; padding: 1.5rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inquiry Generation Modal (Buyers Only) -->
+    <div class="modal-overlay" id="inquiryModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Contact Seller</h3>
+                <button class="close-btn" id="closeInquiryBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="inquiryForm">
+                    <input type="hidden" id="inqPropertyId">
+                    <input type="hidden" id="inqOwnerId">
+                    <input type="hidden" id="inqPropertyTitle">
+                    
+                    <div class="form-group" style="margin-bottom: 2rem; background: var(--bg-main); padding: 1rem; border-radius: var(--radius-sm);">
+                        <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted);">Inquiring about:</p>
+                        <strong id="inqPropNameDisplay" style="color: var(--primary);">Property Title</strong>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Your Message</label>
+                        <textarea id="inqMessage" required rows="5" style="width: 100%; resize: vertical; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.95rem; line-height: 1.5;" placeholder="Hi, I'm highly interested in scheduling a viewing for this property..."></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover">Send Secure Message <i class="ph ph-paper-plane-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ratings & Reviews Modal -->
+    <div class="modal-overlay" id="reviewModal">
+        <div class="modal surface-panel" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>Ratings & Reviews</h3>
+                <button class="close-btn" id="closeReviewBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="reviewList" style="margin-bottom: 2rem; max-height: 350px; overflow-y: auto; padding-right: 0.5rem;"></div>
+                
+                <h4 style="margin-bottom: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem; color: var(--text-main);">Rate this Property</h4>
+                <form id="reviewForm">
+                    <input type="hidden" id="revPropertyId">
+                    <div class="form-group">
+                        <label>Your Quality Rating</label>
+                        <div class="star-rating" id="starInput" style="display: flex; gap: 0.75rem; font-size: 2rem; color: #fbbf24; cursor: pointer; margin: 0.5rem 0 1.5rem 0;">
+                            <i class="ph ph-star active" data-value="1"></i>
+                            <i class="ph ph-star active" data-value="2"></i>
+                            <i class="ph ph-star active" data-value="3"></i>
+                            <i class="ph ph-star active" data-value="4"></i>
+                            <i class="ph ph-star active" data-value="5"></i>
+                        </div>
+                        <input type="hidden" id="revRating" required value="5">
+                    </div>
+                    <div class="form-group">
+                        <label>Share your experience</label>
+                        <textarea id="revComment" required rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention the location vibe, house condition, or neighborhood..."></textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1rem;">Submit Review <i class="ph ph-star-half-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Price History Trend Modal -->
+    <div class="modal-overlay" id="priceModal">
+        <div class="modal surface-panel" style="max-width: 700px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Price Trends</h3>
+                    <p id="priceModalTitle" style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Property Insights</p>
+                </div>
+                <button class="close-btn" id="closePriceBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div style="height: 350px; position: relative;">
+                    <canvas id="priceTrendChart"></canvas>
+                </div>
+                <div id="priceInfo" style="margin-top: 2rem; padding: 1rem; background: var(--bg-main); border-radius: var(--radius-sm); font-size: 0.85rem; color: var(--text-muted);">
+                    <i class="ph ph-info"></i> Historical data based on listed price updates on Estato.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <!-- Google Identity Services (GIS) - Required for OAuth2 -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <!-- jsPDF + autoTable for PDF/CSV export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <script src="./js/storage.js?v=12"></script>
+    <script src="./js/app.v12.js"></script>
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.log('SW registration failed:', err));
+            });
+        }
+    </script>
+</body>
+</html>
