@@ -320,21 +320,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        const devLoginBtn = document.getElementById('devLoginBtn');
-        if (devLoginBtn) {
-            devLoginBtn.addEventListener('click', () => {
-                const role = selectedRoleInput.value;
-                const mockCache = {
-                    currentUser: { id: 'dev_tester', name: 'Dev Tester', email: 'dev@local.host', role: role, picture: 'https://ui-avatars.com/api/?name=Dev+Tester' },
-                    properties: [], cities: [], favorites: [], inquiries: [], notifications: [], activities: [], reviews: []
-                };
-                Storage.restoreData(mockCache);
-                loadingOverlay.classList.remove('hidden');
-                loginScreen.classList.add('hidden');
-                setTimeout(() => checkAuth(), 500);
-            });
-        }
-
         // Unified Google Login
         if (googleLoginBtn) {
             googleLoginBtn.addEventListener('click', async () => {
