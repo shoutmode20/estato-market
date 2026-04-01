@@ -1988,21 +1988,23 @@ document.addEventListener('DOMContentLoaded', () => {
     function initModalMap(lat, lng) {
         const container = document.getElementById('modalMap');
         if (!container) return;
-        
+
         container.style.display = 'block';
-        
-        const centerLat = lat ? parseFloat(lat) : 20.5937;
-        const centerLng = lng ? parseFloat(lng) : 78.9629;
-        const zoom = lat ? 15 : 4;
+
+        const hasLocation = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+        const centerLat = hasLocation ? parseFloat(lat) : 20.5937;
+        const centerLng = hasLocation ? parseFloat(lng) : 78.9629;
+        const zoom = hasLocation ? 15 : 4;
 
         if (!modalMap) {
-            modalMap = L.map('modalMap').setView([centerLat, centerLng], zoom);
+            modalMap = L.map('modalMap', { zoomControl: true }).setView([centerLat, centerLng], zoom);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                 attribution: '&copy; CartoDB',
                 subdomains: 'abcd',
                 maxZoom: 20
             }).addTo(modalMap);
 
+            // Click-to-pin: place / move marker on map click
             modalMap.on('click', (e) => {
                 const newLat = e.latlng.lat.toFixed(6);
                 const newLng = e.latlng.lng.toFixed(6);
@@ -2010,21 +2012,63 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('propLng').value = newLng;
                 updateModalMarker(newLat, newLng);
                 reverseGeocode(newLat, newLng);
+                // Hide instruction tooltip once location is chosen
+                const tip = document.getElementById('mapClickTip');
+                if (tip) tip.style.display = 'none';
             });
+
+            // Instructional overlay — shown only when no location is set yet
+            if (!hasLocation) {
+                const tip = document.createElement('div');
+                tip.id = 'mapClickTip';
+                tip.innerHTML = '<i class="ph ph-map-pin-line"></i>&nbsp;Click anywhere on the map to pin property location';
+                Object.assign(tip.style, {
+                    position: 'absolute', top: '10px', left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(234,88,12,0.92)', color: 'white',
+                    padding: '6px 14px', borderRadius: '20px',
+                    fontSize: '0.78rem', fontWeight: '600',
+                    zIndex: '1000', pointerEvents: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+                    whiteSpace: 'nowrap', letterSpacing: '0.01em',
+                    animation: 'mapTipPulse 2s ease-in-out infinite'
+                });
+                container.style.position = 'relative';
+                container.appendChild(tip);
+            }
         } else {
             modalMap.setView([centerLat, centerLng], zoom);
+            // Show/hide tip based on whether we have coords
+            const tip = document.getElementById('mapClickTip');
+            if (tip) tip.style.display = hasLocation ? 'none' : '';
         }
 
         setTimeout(() => { modalMap.invalidateSize(); }, 100);
-        updateModalMarker(centerLat, centerLng);
+
+        // Only place a marker when we have real coordinates
+        if (hasLocation) {
+            updateModalMarker(centerLat, centerLng);
+        }
     }
-    
+
     function updateModalMarker(lat, lng) {
-        if (!lat || !lng) return;
+        if (lat === null || lat === undefined || lng === null || lng === undefined) return;
+        const fLat = parseFloat(lat);
+        const fLng = parseFloat(lng);
+        if (isNaN(fLat) || isNaN(fLng)) return;
+
         if (modalMarker) {
-            modalMarker.setLatLng([lat, lng]);
+            modalMarker.setLatLng([fLat, fLng]);
+            // Pan map to marker so user sees the pin
+            if (modalMap) modalMap.panTo([fLat, fLng]);
         } else {
-            modalMarker = L.marker([lat, lng], { draggable: true }).addTo(modalMap);
+            if (!modalMap) return;
+            modalMarker = L.marker([fLat, fLng], {
+                draggable: true,
+                title: 'Drag to fine-tune exact location'
+            }).addTo(modalMap);
+
+            // Drag end: sync inputs + reverse geocode
             modalMarker.on('dragend', (e) => {
                 const pos = e.target.getLatLng();
                 const newLat = pos.lat.toFixed(6);
@@ -2032,6 +2076,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('propLat').value = newLat;
                 document.getElementById('propLng').value = newLng;
                 reverseGeocode(newLat, newLng);
+            });
+
+            // Drag start: show a helpful tooltip
+            modalMarker.on('dragstart', () => {
+                modalMarker.bindTooltip('Release to set location', {
+                    permanent: true, className: 'map-drag-tooltip', offset: [0, -30]
+                }).openTooltip();
+            });
+            modalMarker.on('dragend', () => {
+                modalMarker.unbindTooltip();
             });
         }
     }
@@ -2501,6 +2555,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function closeModal() {
         propertyModal.classList.remove('active');
         propertyForm.reset();
+        // Clean up modal marker so next openModal() starts fresh
+        // (the map instance is reused, but the marker state must reset)
+        if (modalMarker && modalMap) {
+            modalMap.removeLayer(modalMarker);
+            modalMarker = null;
+        }
+        // Re-show the click-tip for the next time the modal is opened
+        const tip = document.getElementById('mapClickTip');
+        if (tip) tip.style.display = '';
     }
 
     function handleFormSubmit(e) {

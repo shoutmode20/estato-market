@@ -388,6 +388,36 @@ body {
 }
 .map-price-marker:hover::after { border-top-color: var(--text-main); }
 
+/* Modal Map — "Click to Pin" instruction tip */
+@keyframes mapTipPulse {
+    0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+    50%       { opacity: 0.8; transform: translateX(-50%) scale(1.04); }
+}
+
+/* Leaflet drag tooltip override */
+.map-drag-tooltip.leaflet-tooltip {
+    background: var(--text-main);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    box-shadow: var(--shadow-md);
+    white-space: nowrap;
+}
+.map-drag-tooltip.leaflet-tooltip::before {
+    border-top-color: var(--text-main);
+}
+
+/* Make the modalMap container show a crosshair cursor for click-to-pin UX */
+#modalMap {
+    cursor: crosshair;
+}
+#modalMap .leaflet-marker-icon,
+#modalMap .leaflet-marker-shadow {
+    cursor: move !important; /* Show grab cursor on the draggable marker */
+}
 
 @keyframes shake {
     0%, 100% { transform: translateX(0); }
