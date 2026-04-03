@@ -2,7 +2,7 @@
 # Serves current directory at http://localhost:3000
 # Usage: Right-click -> Run with PowerShell
 
-$port = 3000
+$port = 8080
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$port/")
 

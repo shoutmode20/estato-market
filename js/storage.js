@@ -1,62 +1,41 @@
 // ================================================================
-// V10.1 — Unified Google Identity & Drive Storage Engine
+// V12.1 — Firebase Auth & Realtime Database Storage Engine
 // Estato | Premium Real Estate Marketplace
 // ================================================================
 
-const CLIENT_ID = '736980714234-3v1kjt5sn4doqtv06b280k38j821p3ec.apps.googleusercontent.com';
-const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
-const DRIVE_FILE_NAME = 'estato_data.json';
-const DRIVE_API = 'https://www.googleapis.com/drive/v3';
-const DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
-const USERINFO_API = 'https://www.googleapis.com/oauth2/v3/userinfo';
+const firebaseConfig = {
+    apiKey: "AIzaSyB4nGqV9xPiF5W13npX8tjTHXv_Bosj2PU",
+    authDomain: "estato-marketplace.firebaseapp.com",
+    databaseURL: "https://estato-marketplace-default-rtdb.firebaseio.com/",
+    projectId: "estato-marketplace",
+    storageBucket: "estato-marketplace.firebasestorage.app",
+    messagingSenderId: "186201359877",
+    appId: "1:186201359877:web:7a9a50e18327f75ab0fe6c",
+    measurementId: "G-QD2GP8TXDZ"
+};
 
-// In-memory cache
-let _memCache = null;
-let _driveFileId = null;
-let _accessToken = null;
-let _tokenExpiry = 0;
-let _tokenClient = null;
+// Initialize Firebase if not already initialized
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
+
+const db = firebase.database();
+const auth = firebase.auth();
+const provider = new firebase.auth.GoogleAuthProvider();
+
+// In-memory cache for instant UI rendering
+let _memCache = {
+    currentUser: null,
+    properties: [],
+    cities: ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune'],
+    favorites: [],
+    inquiries: [],
+    notifications: [],
+    activities: [],
+    reviews: []
+};
+
 let _syncCallback = null;
-let _pendingSync = false;
-let _saveTimeout = null;
-
-const LS_SNAPSHOT_KEY = 'estato_offline_snapshot';
-const LS_TIMESTAMP_KEY = 'estato_offline_snapshot_timestamp';
-const LS_FILEID_KEY   = 'estato_offline_snapshot_fileid';
-const LS_PENDING_KEY  = 'estato_pending_sync';
-const CACHE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
-
-// ─── Offline & Cache Helpers ─────────────────────────────────────
-function _saveLocalSnapshot() {
-    try {
-        localStorage.setItem(LS_SNAPSHOT_KEY, JSON.stringify(_memCache));
-        localStorage.setItem(LS_TIMESTAMP_KEY, Date.now().toString());
-        if (_driveFileId) localStorage.setItem(LS_FILEID_KEY, _driveFileId);
-    } catch(e) { console.warn('[Estato] localStorage full, snapshot skipped.'); }
-}
-
-function _loadLocalSnapshot(checkExpiry = false) {
-    try {
-        if (checkExpiry) {
-            const time = parseInt(localStorage.getItem(LS_TIMESTAMP_KEY) || '0', 10);
-            if (Date.now() - time > CACHE_EXPIRY_MS) return null; // Cache expired
-        }
-        const raw = localStorage.getItem(LS_SNAPSHOT_KEY);
-        if (raw) {
-            _driveFileId = localStorage.getItem(LS_FILEID_KEY) || _driveFileId;
-            return JSON.parse(raw);
-        }
-        return null;
-    } catch(e) { return null; }
-}
-
-async function _flushPendingSync() {
-    if (!localStorage.getItem(LS_PENDING_KEY)) return;
-    console.log('[Estato] Back online — flushing pending Drive sync...');
-    await DriveEngine.saveToDrive();
-    localStorage.removeItem(LS_PENDING_KEY);
-    _pendingSync = false;
-}
 
 // Local formatter for notification messages
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
@@ -65,444 +44,305 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
     maximumFractionDigits: 0
 });
 
-// ─── Default Seed Data ───────────────────────────────────────────
-const defaultData = {
-    cities: ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune'],
-    properties: [
-        {
-            id: 'prop_1',
-            ownerId: 'system_admin',
-            title: 'Sea-Facing Luxury Penthouse',
-            city: 'Mumbai',
-            lat: 19.0760,
-            lng: 72.8777,
-            price: 55000000,
-            address: '10 Marine Drive, Mumbai 400020',
-            type: 'Sale',
-            status: 'Available',
-            category: 'Apartment',
-            bhk: '4+ BHK',
-            area: 3200,
-            images: [
-                'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?q=80&w=800&auto=format&fit=crop',
-                'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?q=80&w=800&auto=format&fit=crop',
-                'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?q=80&w=800&auto=format&fit=crop'
-            ]
-        }
-    ],
-    favorites: [],
-    inquiries: [],
-    notifications: [],
-    activities: []
-};
-
-// ─── Drive & Identity REST Helpers ────────────────────────────────
-async function _googleRequest(url, options = {}) {
-    if (!_accessToken) throw new Error('NOT_AUTHENTICATED');
-    const res = await fetch(url, {
-        ...options,
-        headers: {
-            'Authorization': 'Bearer ' + _accessToken,
-            ...options.headers
-        }
-    });
-    if (res.status === 401) throw new Error('TOKEN_EXPIRED');
-    return res;
-}
-
-async function _findFile() {
-    const query = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
-    const res = await _googleRequest(`${DRIVE_API}/files?q=${query}&fields=files(id,name)&spaces=drive`);
-    const data = await res.json();
-    return (data.files && data.files.length > 0) ? data.files[0].id : null;
-}
-
-async function _downloadFile(fileId) {
-    const res = await _googleRequest(`${DRIVE_API}/files/${fileId}?alt=media`);
-    return await res.json();
-}
-
-async function _createFile(content) {
-    const meta = JSON.stringify({ name: DRIVE_FILE_NAME, mimeType: 'application/json' });
-    const body = JSON.stringify(content);
-    const form = new FormData();
-    form.append('metadata', new Blob([meta], { type: 'application/json' }));
-    form.append('media', new Blob([body], { type: 'application/json' }));
-    const res = await _googleRequest(
-        `${DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=id`,
-        { method: 'POST', body: form }
-    );
-    const data = await res.json();
-    return data.id;
-}
-
-async function _updateFile(fileId, content) {
-    await _googleRequest(
-        `${DRIVE_UPLOAD_API}/files/${fileId}?uploadType=media`,
-        {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(content)
-        }
-    );
-}
-
-// ─── Drive & Auth Engine ──────────────────────────────────────────
-const DriveEngine = {
-    init(syncCb) {
-        _syncCallback = syncCb;
-        return new Promise((resolve) => {
-            const tryInit = () => {
-                if (window.google && window.google.accounts) {
-                    _tokenClient = google.accounts.oauth2.initTokenClient({
-                        client_id: CLIENT_ID,
-                        scope: DRIVE_SCOPES,
-                        callback: () => {} 
-                    });
-                    resolve(true);
-                } else {
-                    setTimeout(tryInit, 150);
-                }
-            };
-            tryInit();
-        });
-    },
-
-    isConnected() { return !!_accessToken; },
-
-    requestToken(silent = false) {
-        return new Promise((resolve, reject) => {
-            _tokenClient.callback = (resp) => {
-                if (resp.error) { reject(new Error(resp.error)); return; }
-                _accessToken = resp.access_token;
-                // GIS tokens are valid for 3600s; store with a safe 5-min early-expiry buffer
-                _tokenExpiry = Date.now() + ((resp.expires_in || 3600) - 300) * 1000;
-                sessionStorage.setItem('estato_token', _accessToken);
-                sessionStorage.setItem('estato_token_expiry', String(_tokenExpiry));
-                resolve(resp.access_token);
-            };
-            _tokenClient.requestAccessToken({ prompt: silent ? '' : 'select_account' });
-        });
-    },
-
-    isTokenValid() {
-        return !!_accessToken && Date.now() < _tokenExpiry;
-    },
-
-    async fetchProfile() {
-        const res = await _googleRequest(USERINFO_API);
-        const profile = await res.json();
-        return {
-            id: profile.sub,
-            name: profile.name,
-            email: profile.email,
-            picture: profile.picture
-        };
-    },
-
-    async loadFromDrive() {
-        try {
-            // Smart Cache Check: valid cache? skip Drive fetch!
-            const validCache = _loadLocalSnapshot(true);
-            if (validCache && navigator.onLine) {
-                _memCache = validCache;
-                console.log('[Estato] Using valid local cache, skipping Drive fetch.');
-                return true;
-            }
-
-            console.log('[Estato] Cache missed or expired, fetching from Drive...');
-            _driveFileId = await _findFile();
-            if (_driveFileId) {
-                _memCache = await _downloadFile(_driveFileId);
-            } else {
-                _memCache = JSON.parse(JSON.stringify(defaultData));
-                _driveFileId = await _createFile(_memCache);
-            }
-            _saveLocalSnapshot(); // Update cache & timestamp on successful load
-            return true;
-        } catch(e) {
-            console.error('[Estato] Drive sync error:', e.message);
-            if (e.message === 'TOKEN_EXPIRED') _accessToken = null;
-            // Graceful offline fallback: restore last known snapshot (ignoring expiry)
-            const snapshot = _loadLocalSnapshot(false);
-            if (snapshot) {
-                _memCache = snapshot;
-                console.warn('[Estato] Offline mode — using local snapshot.');
-                if (_syncCallback) _syncCallback('offline');
-            }
-            return !!snapshot;
-        }
-    },
-
-    async saveToDrive() {
-        if (!_accessToken || !_memCache) return;
-        if (_syncCallback) _syncCallback('syncing');
-        try {
-            if (_driveFileId) {
-                await _updateFile(_driveFileId, _memCache);
-            } else {
-                _driveFileId = await _createFile(_memCache);
-            }
-            if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
-            console.error('[Estato] Save error:', e.message);
-            if (_syncCallback) _syncCallback('error');
-            if (e.message === 'TOKEN_EXPIRED') _accessToken = null;
-        }
-    }
-};
-
 // ─── Public Storage API ───────────────────────────────────────────
 const Storage = {
     async initDrive(syncCb) {
-        return DriveEngine.init(syncCb);
+        _syncCallback = syncCb;
+        return true;
     },
 
     /** Central Login Entry Point */
     async loginWithGoogle(selectedRole = 'Seller', silent = false) {
         try {
-            // Restore token from session if silent
-            if (silent) {
-                const cachedToken = sessionStorage.getItem('estato_token');
-                const cachedExpiry = parseInt(sessionStorage.getItem('estato_token_expiry') || '0', 10);
-                if (cachedToken && Date.now() < cachedExpiry) {
-                    _accessToken = cachedToken;
-                    _tokenExpiry = cachedExpiry;
+            if (_syncCallback) _syncCallback('syncing');
+            let user = auth.currentUser;
+            
+            if (!user) {
+                if (silent) {
+                    await new Promise((resolve, reject) => {
+                        const unsub = auth.onAuthStateChanged(u => {
+                            unsub();
+                            if(u) resolve(u); else reject(new Error('no_session'));
+                        });
+                    });
+                    user = auth.currentUser;
                 } else {
-                    // Token missing or expired — clear stale session data
-                    sessionStorage.removeItem('estato_token');
-                    sessionStorage.removeItem('estato_token_expiry');
-                    return false;
+                    const result = await auth.signInWithPopup(provider);
+                    user = result.user;
                 }
-            } else {
-                await DriveEngine.requestToken(false);
             }
 
-            // 1. Fetch User Identity
-            const profile = await DriveEngine.fetchProfile();
-            
-            // 2. Hydrate Data from Drive
-            await DriveEngine.loadFromDrive();
+            if (!user) {
+                throw new Error("Login failed or cancelled.");
+            }
 
-            // 3. Setup Current User
-            // For demo/testing purposes, always respect the UI selectedRole if provided.
-            // If silent login (selectedRole is null), fallback to their cached role.
-            const existingUser = _memCache.currentUser && _memCache.currentUser.id === profile.id ? _memCache.currentUser : null;
-            const roleToUse = selectedRole || (existingUser ? existingUser.role : 'Buyer');
+            // 1. Fetch User Identity and Setup Role
+            let userRef = db.ref('users/' + user.uid);
+            let userSnap = await userRef.get();
+            let roleToUse = selectedRole;
             
+            if (!userSnap.exists()) {
+                // First time sign-up
+                await userRef.set({
+                    id: user.uid,
+                    name: user.displayName,
+                    email: user.email,
+                    picture: user.photoURL,
+                    role: selectedRole
+                });
+            } else {
+                // Welcome back!
+                const data = userSnap.val();
+                roleToUse = data.role || selectedRole;
+            }
+
             _memCache.currentUser = {
-                ...profile,
+                id: user.uid,
+                name: user.displayName,
+                email: user.email,
+                picture: user.photoURL,
                 role: roleToUse
             };
 
-            // Persist for session restoration
-            localStorage.setItem('estato_user_role', _memCache.currentUser.role);
+            // 2. Hydrate Global Data (Properties are shared for all!)
+            await this.loadAllData();
 
-            this._save();
+            if (_syncCallback) _syncCallback('synced');
             return true;
         } catch(e) {
-            console.warn('[Estato] Auth Flow interrupted:', e.message);
+            console.warn('[Estato Firebase] Auth Flow interrupted:', e.message);
+            if (_syncCallback) _syncCallback('error');
             return false;
         }
     },
 
-    logout() {
-        if (_memCache) _memCache.currentUser = null;
-        _accessToken = null;
-        _tokenExpiry = 0;
-        sessionStorage.removeItem('estato_token');
-        sessionStorage.removeItem('estato_token_expiry');
-        localStorage.removeItem('estato_user_role');
-        // Note: we intentionally do NOT call _save() here because the token is
-        // already cleared — saveToDrive() would silently skip anyway.
-    },
-
-    getCurrentUser() {
-        return _memCache ? _memCache.currentUser : null;
-    },
-
-    getData() { return _memCache; },
-
-    /** Flush any pending Drive saves queued while offline */
-    async _flushPendingSync() { return _flushPendingSync(); },
-
-    /** True when the last save was deferred due to being offline */
-    hasPendingSync() { return _pendingSync || !!localStorage.getItem(LS_PENDING_KEY); },
-
-    _save() {
-        _saveLocalSnapshot(); // Always persist locally first (UI updates instantly)
+    async loadAllData() {
+        const uid = _memCache.currentUser.id;
+        const role = _memCache.currentUser.role;
         
-        if (!navigator.onLine) {
-            // Mark as pending; service worker background sync will retry
-            localStorage.setItem(LS_PENDING_KEY, '1');
-            _pendingSync = true;
-            if (_syncCallback) _syncCallback('offline');
-            // Register Background Sync if supported
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.ready.then(reg => {
-                    if (reg.sync) reg.sync.register('estato-drive-sync').catch(() => {});
-                });
+        try {
+            // Load properties (Global)
+            const propsSnap = await db.ref('properties').get();
+            if (propsSnap.exists()) {
+                const propsData = propsSnap.val();
+                _memCache.properties = Object.values(propsData);
+            } else {
+                _memCache.properties = [];
             }
-            return;
+            
+            // Recompute cities
+            const propCities = _memCache.properties.map(p => p.city).filter(Boolean);
+            _memCache.cities = [...new Set([..._memCache.cities, ...propCities])];
+
+            // Load user-specific favorites
+            const favSnap = await db.ref('favorites/' + uid).get();
+            _memCache.favorites = favSnap.exists() ? (favSnap.val().ids || []) : [];
+
+            // Load inquiries
+            const inqSnap = await db.ref('inquiries').get();
+            if (inqSnap.exists()) {
+                const allInquiries = Object.values(inqSnap.val());
+                if (role === 'Admin') {
+                    _memCache.inquiries = allInquiries;
+                } else if (role === 'Owner' || role === 'Seller') {
+                    _memCache.inquiries = allInquiries.filter(i => i.ownerId === uid);
+                } else {
+                    _memCache.inquiries = allInquiries.filter(i => i.buyerId === uid);
+                }
+            } else {
+                _memCache.inquiries = [];
+            }
+
+            // Load personal notifications
+            const notifSnap = await db.ref('notifications/' + uid).get();
+            _memCache.notifications = notifSnap.exists() ? (notifSnap.val().items || []) : [];
+
+            // Load platform activities
+            const actSnap = await db.ref('activities').orderByChild('timestamp').limitToLast(100).get();
+            if (actSnap.exists()) {
+                _memCache.activities = Object.values(actSnap.val()).reverse(); // Newest first
+            } else {
+                _memCache.activities = [];
+            }
+            
+            // Load reviews
+            const revSnap = await db.ref('reviews').get();
+            if (revSnap.exists()) {
+                _memCache.reviews = Object.values(revSnap.val());
+            } else {
+                _memCache.reviews = [];
+            }
+
+        } catch(e) {
+            console.error("[Estato Firebase] Failed to hydrate data", e);
         }
-
-        // Write-Behind Cache: Debounce Drive writes by 2 seconds
-        if (_saveTimeout) clearTimeout(_saveTimeout);
-        
-        // Let the UI know we are queuing a save (debounced)
-        if (_syncCallback) _syncCallback('syncing');
-
-        _saveTimeout = setTimeout(() => {
-            DriveEngine.saveToDrive();
-        }, 2000);
     },
+
+    logout() {
+        auth.signOut();
+        _memCache.currentUser = null;
+    },
+
+    getCurrentUser() { return _memCache.currentUser; },
+    getData() { return _memCache; },
+    hasPendingSync() { return false; },
 
     // ── Properties Logic ──
-    getProperties() { return _memCache ? _memCache.properties : []; },
+    getProperties() { return _memCache.properties; },
 
     getPropertyById(id) {
         return this.getProperties().find(p => p.id === id);
     },
 
-    addProperty(property) {
-        const data = _memCache;
+    async addProperty(property) {
+        if (_syncCallback) _syncCallback('syncing');
         property.id = 'prop_' + Date.now();
-        property.ownerId = data.currentUser.id;
-        
-        // Initialize Price History
-        property.priceHistory = [{
-            price: property.price,
-            date: new Date().toISOString()
-        }];
+        property.ownerId = _memCache.currentUser.id;
+        property.priceHistory = [{ price: property.price, date: new Date().toISOString() }];
 
-        data.properties.push(property);
-        if (property.city && !data.cities.includes(property.city)) {
-            data.cities.push(property.city);
+        // Optimistic UI Update
+        _memCache.properties.push(property);
+        if (property.city && !_memCache.cities.includes(property.city)) {
+            _memCache.cities.push(property.city);
         }
-        
-        this.addNotification(`New property listed: ${property.title}`, 'new_listing', { id: property.id });
-        
-        this.logActivity('ADD_PROPERTY', `Added new ${property.category}: ${property.title}`);
 
-        this._save();
+        try {
+            await db.ref('properties/' + property.id).set(property);
+            this.addNotification(`New property listed: ${property.title}`, 'new_listing', { id: property.id });
+            this.logActivity('ADD_PROPERTY', `Added new ${property.category}: ${property.title}`);
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            console.error(e);
+            if (_syncCallback) _syncCallback('error');
+        }
         return property;
     },
 
-    updateProperty(updatedProp) {
-        const data = _memCache;
-        const index = data.properties.findIndex(p => p.id === updatedProp.id);
+    async updateProperty(updatedProp) {
+        if (_syncCallback) _syncCallback('syncing');
+        const index = _memCache.properties.findIndex(p => p.id === updatedProp.id);
         if (index !== -1) {
-            const prop = data.properties[index];
-            const user = data.currentUser;
+            const prop = _memCache.properties[index];
+            const user = _memCache.currentUser;
             
-            // Security: Only owner or admin can update
             const isAuthorized = user && (user.role === 'Admin' || prop.ownerId === user.id);
-            if (!isAuthorized) {
-                console.error("Unauthorized update attempt");
-                return false;
-            }
+            if (!isAuthorized) return false;
 
-            // Trigger price update notification & history log
             if (updatedProp.price && Number(updatedProp.price) !== Number(prop.price)) {
                 this.addNotification(`Price updated for ${prop.title}: ${currencyFormatter.format(updatedProp.price)}`, 'price_update', { id: prop.id });
-                
                 if (!prop.priceHistory) prop.priceHistory = [];
-                prop.priceHistory.push({
-                    price: Number(updatedProp.price),
-                    date: new Date().toISOString()
-                });
+                prop.priceHistory.push({ price: Number(updatedProp.price), date: new Date().toISOString() });
             }
 
-            // Preserve ownerId and history across updates
-            data.properties[index] = {
-                ...prop,
-                ...updatedProp,
-                priceHistory: prop.priceHistory,
-                ownerId: prop.ownerId
-            };
+            // Optimistic update
+            _memCache.properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId };
 
-            this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
-
-            this._save();
+            try {
+                await db.ref('properties/' + updatedProp.id).update(_memCache.properties[index]);
+                this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
+                if (_syncCallback) _syncCallback('synced');
+            } catch(e) {
+                console.error(e);
+                if (_syncCallback) _syncCallback('error');
+            }
             return true;
         }
         return false;
     },
 
-    deleteProperty(id) {
-        const data = _memCache;
-        const prop = data.properties.find(p => p.id === id);
+    async deleteProperty(id) {
+        if (_syncCallback) _syncCallback('syncing');
+        const prop = _memCache.properties.find(p => p.id === id);
         if (!prop) return false;
         
-        // RBAC: owner can delete their own, Admin can delete ANY
-        const isAuthorized = data.currentUser && (data.currentUser.role === 'Admin' || prop.ownerId === data.currentUser.id);
+        const isAuthorized = _memCache.currentUser && (_memCache.currentUser.role === 'Admin' || prop.ownerId === _memCache.currentUser.id);
         if (!isAuthorized) return false;
         
-        data.properties = data.properties.filter(p => p.id !== id);
+        _memCache.properties = _memCache.properties.filter(p => p.id !== id);
         
-        this.logActivity('DELETE_PROPERTY', `Deleted property: ${prop.title} (${id})`);
-
-        this._save();
+        try {
+            await db.ref('properties/' + id).remove();
+            this.logActivity('DELETE_PROPERTY', `Deleted property: ${prop.title} (${id})`);
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            console.error(e);
+            if (_syncCallback) _syncCallback('error');
+        }
         return true;
     },
 
     // ── Favorites ──
-    getFavorites() { 
-        if (!_memCache || !_memCache.favorites) return [];
-        return _memCache.favorites; 
-    },
+    getFavorites() { return _memCache.favorites; },
 
-    toggleFavorite(id) {
-        if (!_memCache) return;
-        if (!_memCache.favorites) _memCache.favorites = [];
+    async toggleFavorite(id) {
+        if (_syncCallback) _syncCallback('syncing');
         const index = _memCache.favorites.indexOf(id);
         if (index === -1) _memCache.favorites.push(id);
         else _memCache.favorites.splice(index, 1);
-        this._save();
+        
+        try {
+            await db.ref('favorites/' + _memCache.currentUser.id).set({ ids: _memCache.favorites });
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            if (_syncCallback) _syncCallback('error');
+        }
     },
 
     // ── Cities / CRM ──
-    getCities() { return _memCache ? _memCache.cities : []; },
-    getInquiries() { return _memCache ? _memCache.inquiries : []; },
-    addInquiry(inquiry) {
-        if (!_memCache.inquiries) _memCache.inquiries = [];
+    getCities() { return _memCache.cities; },
+    getInquiries() { return _memCache.inquiries; },
+    
+    async addInquiry(inquiry) {
+        if (_syncCallback) _syncCallback('syncing');
         inquiry.id = 'inq_' + Date.now();
         inquiry.date = new Date().toISOString();
         inquiry.read = false;
         
         _memCache.inquiries.push(inquiry);
         
-        // Trigger automated notification for the Seller
-        this.addNotification(
-            `New Inquiry alert for ${inquiry.propertyTitle} from ${inquiry.buyerName}`, 
-            'new_inquiry', 
-            { id: inquiry.propertyId, ownerId: inquiry.ownerId }
-        );
-
-        this._save();
+        try {
+            await db.ref('inquiries/' + inquiry.id).set(inquiry);
+            
+            // Add notification to the seller
+            const notifRef = db.ref('notifications/' + inquiry.ownerId);
+            const docSnap = await notifRef.get();
+            let items = docSnap.exists() ? docSnap.val().items : [];
+            items.unshift({
+                id: 'notif_' + Date.now(),
+                message: `New Inquiry alert for ${inquiry.propertyTitle} from ${inquiry.buyerName}`,
+                type: 'new_inquiry',
+                meta: { id: inquiry.propertyId, ownerId: inquiry.ownerId },
+                timestamp: new Date().toISOString(),
+                read: false
+            });
+            await notifRef.set({ items: items });
+            
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            if (_syncCallback) _syncCallback('error');
+        }
         return inquiry;
     },
 
-    deleteInquiry(id) {
-        if (!_memCache.inquiries) return false;
+    async deleteInquiry(id) {
+        if (_syncCallback) _syncCallback('syncing');
         const index = _memCache.inquiries.findIndex(i => i.id === id);
         if (index === -1) return false;
         
         _memCache.inquiries.splice(index, 1);
-        this._save();
+        try {
+            await db.ref('inquiries/' + id).remove();
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            if (_syncCallback) _syncCallback('error');
+        }
         return true;
     },
 
     // ── Notifications ──
-    getNotifications() {
-        if (!_memCache || !_memCache.notifications) return [];
-        return _memCache.notifications;
-    },
+    getNotifications() { return _memCache.notifications; },
 
-    addNotification(message, type = 'info', meta = {}) {
-        if (!_memCache) return;
-        if (!_memCache.notifications) _memCache.notifications = [];
-        
+    async addNotification(message, type = 'info', meta = {}) {
         const notification = {
             id: 'notif_' + Date.now(),
             message,
@@ -511,26 +351,24 @@ const Storage = {
             timestamp: new Date().toISOString(),
             read: false
         };
+        _memCache.notifications.unshift(notification);
         
-        _memCache.notifications.unshift(notification); // Newest first
-        this._save();
+        try {
+            await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
+        } catch(e) {}
     },
 
-    markNotificationsRead() {
-        if (!_memCache || !_memCache.notifications) return;
+    async markNotificationsRead() {
         _memCache.notifications.forEach(n => n.read = true);
-        this._save();
+        try {
+            await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
+        } catch(e) {}
     },
 
     // ── Activity Logging ──
-    getActivities() {
-        if (!_memCache || !_memCache.activities) return [];
-        return _memCache.activities;
-    },
+    getActivities() { return _memCache.activities; },
 
-    logActivity(action, details) {
-        if (!_memCache) return;
-        if (!_memCache.activities) _memCache.activities = [];
+    async logActivity(action, details) {
         const user = this.getCurrentUser();
         if (!user) return;
 
@@ -545,13 +383,11 @@ const Storage = {
         };
 
         _memCache.activities.unshift(activity);
-        
-        // Keep only last 100 activities
-        if (_memCache.activities.length > 100) {
-            _memCache.activities = _memCache.activities.slice(0, 100);
-        }
+        if (_memCache.activities.length > 100) _memCache.activities = _memCache.activities.slice(0, 100);
 
-        this._save();
+        try {
+            await db.ref('activities/' + activity.id).set(activity);
+        } catch(e) {}
     },
 
     getStats() {
@@ -559,23 +395,13 @@ const Storage = {
         const user = this.getCurrentUser();
         if (!user) return { totalProperties: 0, totalCities: 0, forSale: 0, forRent: 0, totalValue: 0, avgPriceByCity: {}, typeDistribution: {} };
         
-        // Admin sees everything, Seller sees only their own
         const filtered = user.role === 'Admin' ? properties : properties.filter(p => p.ownerId === user.id);
-        
-        const stats = {
-            totalProperties: filtered.length,
-            totalValue: 0,
-            forSale: 0,
-            forRent: 0,
-            cityData: {}, // { city: { count: 0, total: 0 } }
-            typeDistribution: { 'Sale': 0, 'Rent': 0 }
-        };
+        const stats = { totalProperties: filtered.length, totalValue: 0, forSale: 0, forRent: 0, cityData: {}, typeDistribution: { 'Sale': 0, 'Rent': 0 } };
 
         filtered.forEach(p => {
             stats.totalValue += p.price;
             if (p.type === 'Sale') stats.forSale++;
             if (p.type === 'Rent') stats.forRent++;
-            
             stats.typeDistribution[p.type] = (stats.typeDistribution[p.type] || 0) + 1;
 
             if (!stats.cityData[p.city]) stats.cityData[p.city] = { count: 0, total: 0 };
@@ -584,9 +410,7 @@ const Storage = {
         });
 
         const avgPriceByCity = {};
-        for (const city in stats.cityData) {
-            avgPriceByCity[city] = Math.round(stats.cityData[city].total / stats.cityData[city].count);
-        }
+        for (const city in stats.cityData) avgPriceByCity[city] = Math.round(stats.cityData[city].total / stats.cityData[city].count);
 
         return {
             totalProperties: stats.totalProperties,
@@ -601,13 +425,11 @@ const Storage = {
 
     // ── Reviews Sync ──
     getReviewsByProperty(propertyId) {
-        if (!_memCache || !_memCache.reviews) return [];
         return _memCache.reviews.filter(r => r.propertyId === propertyId);
     },
 
-    addReview(propertyId, rating, comment) {
-        if (!_memCache) return;
-        if (!_memCache.reviews) _memCache.reviews = [];
+    async addReview(propertyId, rating, comment) {
+        if (_syncCallback) _syncCallback('syncing');
         const user = this.getCurrentUser();
         if (!user) return;
 
@@ -622,7 +444,12 @@ const Storage = {
         };
 
         _memCache.reviews.push(review);
-        this._save();
+        try {
+            await db.ref('reviews/' + review.id).set(review);
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            if (_syncCallback) _syncCallback('error');
+        }
         return review;
     },
 
@@ -630,19 +457,13 @@ const Storage = {
         const reviews = this.getReviewsByProperty(propertyId);
         if (reviews.length === 0) return { average: 0, count: 0 };
         const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
-        return {
-            average: (sum / reviews.length).toFixed(1),
-            count: reviews.length
-        };
+        return { average: (sum / reviews.length).toFixed(1), count: reviews.length };
     },
 
     // ── Recently Viewed (LocalStorage Only) ──
     getRecentViews(userId) {
         if (!userId) return [];
-        try {
-            const data = localStorage.getItem(`estato_recent_v1_${userId}`);
-            return data ? JSON.parse(data) : [];
-        } catch(e) { return []; }
+        try { return JSON.parse(localStorage.getItem(`estato_recent_v1_${userId}`) || '[]'); } catch(e) { return []; }
     },
 
     addRecentView(userId, propertyId) {
@@ -652,29 +473,6 @@ const Storage = {
             const filtered = current.filter(id => id !== propertyId);
             const updated = [propertyId, ...filtered].slice(0, 10);
             localStorage.setItem(`estato_recent_v1_${userId}`, JSON.stringify(updated));
-        } catch(e) { console.warn('[Storage] Recent view save failed:', e); }
-    },
-
-    /** Full System Restore (Admins Only) */
-    restoreData(newData) {
-        if (!newData || typeof newData !== 'object') throw new Error('Invalid data format');
-        
-        // Validation: Required root arrays
-        const required = ['properties', 'users', 'cities', 'favorites', 'inquiries', 'notifications', 'activities'];
-        const missing = required.filter(key => !Array.isArray(newData[key]) && key !== 'users'); // users is optional if relying on Drive auth
-        
-        if (missing.includes('properties')) throw new Error('Backup is missing property database');
-
-        // Preserve current user to prevent session hijacking via restore
-        const currentUser = _memCache ? _memCache.currentUser : (newData.currentUser || null);
-        
-        _memCache = {
-            ...newData,
-            currentUser: currentUser // Ensure person restoring stays logged in
-        };
-
-        console.log('[Estato] Full system restore successful. Syncing...');
-        this._save();
-        return true;
+        } catch(e) {}
     }
 };
