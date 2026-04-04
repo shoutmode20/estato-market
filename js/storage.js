@@ -324,6 +324,43 @@ const Storage = {
         return inquiry;
     },
 
+    async addInquiryReply(inquiryId, replyPayload) {
+        if (_syncCallback) _syncCallback('syncing');
+        const index = _memCache.inquiries.findIndex(i => i.id === inquiryId);
+        if (index === -1) return false;
+
+        const inquiry = _memCache.inquiries[index];
+        if (!inquiry.replies) inquiry.replies = [];
+        
+        replyPayload.id = 'reply_' + Date.now();
+        replyPayload.date = new Date().toISOString();
+        inquiry.replies.push(replyPayload);
+
+        try {
+            await db.ref('inquiries/' + inquiryId + '/replies').set(inquiry.replies);
+            
+            // Add notification to the receiver
+            const receiverId = replyPayload.senderRole === 'Buyer' ? inquiry.ownerId : inquiry.buyerId;
+            const notifRef = db.ref('notifications/' + receiverId);
+            const docSnap = await notifRef.get();
+            let items = docSnap.exists() ? docSnap.val().items : [];
+            items.unshift({
+                id: 'notif_' + Date.now(),
+                message: `New reply on inquiry for ${inquiry.propertyTitle} from ${replyPayload.senderName}`,
+                type: 'new_reply',
+                meta: { id: inquiry.propertyId, inquiryId: inquiry.id },
+                timestamp: new Date().toISOString(),
+                read: false
+            });
+            await notifRef.set({ items: items });
+
+            if (_syncCallback) _syncCallback('synced');
+        } catch(e) {
+            if (_syncCallback) _syncCallback('error');
+        }
+        return replyPayload;
+    },
+
     async deleteInquiry(id) {
         if (_syncCallback) _syncCallback('syncing');
         const index = _memCache.inquiries.findIndex(i => i.id === id);

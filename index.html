@@ -105,9 +105,9 @@
                     <i class="ph ph-map-pin"></i>
                     <span>Service Areas</span>
                 </li>
-                <li class="nav-item admin-only" data-view="messages">
+                <li class="nav-item" data-view="messages">
                     <i class="ph ph-envelope"></i>
-                    <span>Inbound Leads</span>
+                    <span>Messages</span>
                 </li>
                 <li class="nav-item" data-view="watchlist">
                     <i class="ph ph-heart"></i>
@@ -377,6 +377,30 @@
 
                     <div class="modal-footer">
                         <button type="submit" class="btn btn-primary w-full shadow-hover">Send Secure Message <i class="ph ph-paper-plane-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reply Modal -->
+    <div class="modal-overlay" id="replyModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Send Reply</h3>
+                <button class="close-btn" id="closeReplyBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="replyForm">
+                    <input type="hidden" id="replyInqId">
+                    
+                    <div class="form-group">
+                        <label>Your Message</label>
+                        <textarea id="replyMessage" required rows="4" style="width: 100%; resize: vertical; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.95rem; line-height: 1.5;" placeholder="Write your reply..."></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover">Send Reply <i class="ph ph-paper-plane-tilt"></i></button>
                     </div>
                 </form>
             </div>

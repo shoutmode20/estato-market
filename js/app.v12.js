@@ -462,6 +462,36 @@ document.addEventListener('DOMContentLoaded', () => {
         const inquiryModal = document.getElementById('inquiryModal');
         const inquiryForm = document.getElementById('inquiryForm');
 
+        // Reply Listeners
+        const closeReplyBtn = document.getElementById('closeReplyBtn');
+        const replyModal = document.getElementById('replyModal');
+        const replyForm = document.getElementById('replyForm');
+
+        if(closeReplyBtn) closeReplyBtn.addEventListener('click', () => replyModal.classList.remove('active'));
+        if(replyForm) {
+            replyForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('replyMessage').value.trim();
+                if (!msg) {
+                    alert('Please write a message before sending.');
+                    return;
+                }
+                const inqId = document.getElementById('replyInqId').value;
+                
+                await Storage.addInquiryReply(inqId, {
+                    senderId: currentUser.id,
+                    senderName: currentUser.name,
+                    senderRole: currentUser.role,
+                    message: msg
+                });
+
+                replyModal.classList.remove('active');
+                replyForm.reset();
+                if (currentView === 'messages') renderMessages();
+            });
+        }
+
+
         if(closeInquiryBtn) closeInquiryBtn.addEventListener('click', () => inquiryModal.classList.remove('active'));
         if(inquiryForm) {
             inquiryForm.addEventListener('submit', (e) => {
@@ -946,7 +976,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dashboardCharts = [];
 
         // RBAC View Security Check
-        if(currentUser.role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities' || viewName === 'messages')) {
+        if(currentUser.role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities')) {
             renderProperties(); // Fallback secure redirect
             return;
         }
@@ -1638,13 +1668,33 @@ document.addEventListener('DOMContentLoaded', () => {
         
         inquiries = inquiries.reverse();
         
-        let html = `<div class="section-header"><h2>Inbound Buyer Leads</h2></div>`;
+        let headerText = currentUser.role === 'Buyer' ? 'My Inquiries' : 'Inbound Leads';
+        let html = `<div class="section-header"><h2>${headerText}</h2></div>`;
         
         if (inquiries.length === 0) {
             html += `<div class="empty-state"><i class="ph-duotone ph-envelope-open" style="font-size: 4rem; color: #cbd5e1; margin-bottom: 1rem; display: block;"></i><p>No messages yet. Keep publishing great listings to attract buyers!</p></div>`;
         } else {
             html += `<div class="analytics-grid" style="grid-template-columns: 1fr;">`;
-            html += inquiries.map(inq => `
+            html += inquiries.map(inq => {
+                let repliesHtml = '';
+                if (inq.replies && inq.replies.length > 0) {
+                    repliesHtml = '<div class="chat-history" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">';
+                    inq.replies.forEach(reply => {
+                        const isMe = reply.senderId === currentUser.id;
+                        repliesHtml += `
+                            <div style="display: flex; gap: 0.75rem; flex-direction: ${isMe ? 'row-reverse' : 'row'}; align-items: flex-end;">
+                                <div class="avatar" style="width: 30px; height: 30px; min-width: 30px; background: var(--border-color); display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.8rem; font-weight: bold; color: var(--text-main);">${reply.senderName.charAt(0)}</div>
+                                <div style="background: ${isMe ? 'var(--primary-light)' : 'var(--bg-main)'}; color: ${isMe ? 'var(--primary)' : 'var(--text-main)'}; padding: 0.75rem 1rem; border-radius: 1rem; border-bottom-${isMe ? 'right' : 'left'}-radius: 0; font-size: 0.9rem; border: 1px solid ${isMe ? 'rgba(234, 88, 12, 0.2)' : 'var(--border-color)'}; max-width: 80%;">
+                                    <div style="font-weight: bold; font-size: 0.75rem; margin-bottom: 0.25rem;">${reply.senderName} <span style="font-weight: normal; color: var(--text-muted); margin-left: 0.5rem;">${new Date(reply.date).toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'short'})}</span></div>
+                                    ${reply.message}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    repliesHtml += '</div>';
+                }
+
+                return `
                 <div class="message-card surface-panel">
                     <div class="message-header">
                         <div class="message-buyer">
@@ -1656,6 +1706,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div style="display: flex; gap: 0.75rem; align-items: center;">
                             <div class="message-property"><i class="ph-duotone ph-buildings"></i> ${inq.propertyTitle}</div>
+                            <button class="btn btn-icon shadow-hover open-reply-btn" data-id="${inq.id}" title="Reply in Chat" style="background: var(--primary-light); color: var(--primary); display: inline-flex; align-items: center; justify-content: center;">
+                                <i class="ph ph-chat-text"></i>
+                            </button>
                             <button class="btn btn-icon btn-danger-soft delete-inq-btn shadow-hover" data-id="${inq.id}" title="Archive Inquiry">
                                 <i class="ph ph-trash"></i>
                             </button>
@@ -1664,15 +1717,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="message-body" style="background: var(--bg-hover); padding: 1.25rem; border-radius: var(--radius-sm); margin: 1rem 0; border-left: 4px solid var(--primary); font-style: italic; color: var(--text-main);">
                         "${inq.message}"
                     </div>
-                    <div style="text-align: right; font-size: 0.8rem; color: var(--text-muted); font-weight: 500;">
-                        <i class="ph ph-clock"></i> Received: ${new Date(inq.date).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                    ${repliesHtml}
+                    <div style="text-align: right; font-size: 0.8rem; color: var(--text-muted); font-weight: 500; margin-top: 1rem;">
+                        <i class="ph ph-clock"></i> Started: ${new Date(inq.date).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
             html += `</div>`;
         }
         viewContainer.innerHTML = html;
         
+        document.querySelectorAll('.open-reply-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const inqId = e.currentTarget.getAttribute('data-id');
+                document.getElementById('replyInqId').value = inqId;
+                document.getElementById('replyModal').classList.add('active');
+            });
+        });
+
         // Attach Deletion Listeners
         document.querySelectorAll('.delete-inq-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
