@@ -1,15 +1,16 @@
 <!DOCTYPE html>
+<!-- Estato SEO Updated -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="description" content="Estato is a premium, high-performance real estate marketplace for discovering, comparing, and tracking top properties natively in your browser.">
-    <meta property="og:title" content="Estato | Premium Real Estate Marketplace">
-    <meta property="og:description" content="Discover, compare, and connect with sellers securely on Estato.">
+    <meta name="description" content="Estato V12.1 — The definitive premium real estate marketplace. Real-time listings, proximity search, and seamless secure property management.">
+    <meta property="og:title" content="Estato V12.1 | Premium Real Estate Marketplace">
+    <meta property="og:description" content="The next generation of real estate discovery. Secure, real-time, and mobile-first.">
     <meta property="og:image" content="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?q=80&w=1200&auto=format&fit=crop">
     <meta property="og:type" content="website">
     <meta name="theme-color" content="#ea580c">
-    <title>Estato | Premium Real Estate Marketplace</title>
+    <title>Estato V12.1 | Premium Real Estate Marketplace</title>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Phosphor Icons -->
@@ -27,7 +28,7 @@
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="./css/styles.css?v=12">
+    <link rel="stylesheet" href="./css/styles.css?v=12.1">
 </head>
 <body>
 
@@ -229,6 +230,11 @@
                     <div class="form-group">
                         <label>Listing Title</label>
                         <input type="text" id="propTitle" required placeholder="e.g. Luxury Sea-facing Penthouse">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Project / Society Name</label>
+                        <input type="text" id="propProjectName" placeholder="e.g. Mantri Serenity or Hiranandani Estate">
                     </div>
                     
                     <div class="form-row">
@@ -473,8 +479,8 @@
     <!-- jsPDF + autoTable for PDF/CSV export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-    <script src="./js/storage.js?v=12"></script>
-    <script src="./js/app.v12.js"></script>
+    <script src="./js/storage.js?v=12.1"></script>
+    <script src="./js/app.v12.js?v=12.1"></script>
     <!-- PWA Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {

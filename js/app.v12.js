@@ -1,3 +1,4 @@
+/* Estato V12.1 - Production - SEO & Pagination Enabled */
 document.addEventListener('DOMContentLoaded', () => {
 
     // --- State and Cache ---
@@ -51,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ],
         types: ['Sale', 'Rent'],
         categories: Object.keys(PROPERTY_METADATA),
-        statuses: ['Available', 'Rented', 'Sold'],
+        statuses: ['Available', 'Pending', 'Rented', 'Sold'],
         bhkLayouts: ['Studio', '1 BHK', '2 BHK', '3 BHK', '4+ BHK']
     };
 
@@ -253,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Initialization ---
-    console.log("Estato V11.2 Booting...");
+    console.log("Estato V12.1 (Production) Booting...");
     initApp();
 
     async function initApp() {
@@ -302,6 +303,14 @@ document.addEventListener('DOMContentLoaded', () => {
             renderView(currentView);
             renderNotifications();
             populateCitiesDatalist();
+
+            // Real-time UI Sync: Automatically re-render current view when storage data changes
+            Storage.subscribe(() => {
+                console.log("[Estato] Data changed, refreshing current view:", currentView);
+                renderView(currentView, searchInput.value);
+                renderNotifications();
+                updateSeoMetadata();
+            });
         } else {
             loginScreen.classList.remove('hidden');
             appContainer.classList.add('hidden');
@@ -370,6 +379,27 @@ document.addEventListener('DOMContentLoaded', () => {
         if (listenersMounted) return;
         listenersMounted = true;
 
+        const mainContent = document.querySelector('.main-content');
+        let isPaging = false;
+
+        if (mainContent) {
+            mainContent.addEventListener('scroll', async () => {
+                if (currentView !== 'properties') return;
+                if (isPaging) return;
+
+                const { scrollTop, scrollHeight, clientHeight } = mainContent;
+                if (scrollTop + clientHeight >= scrollHeight - 300) {
+                    isPaging = true;
+                    console.log("[Estato] Bottom reached, loading more...");
+                    const loaded = await Storage.loadMoreProperties();
+                    if (loaded) {
+                        console.log("[Estato] Page loaded successfully");
+                    }
+                    isPaging = false;
+                }
+            });
+        }
+
         navItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 const view = item.getAttribute('data-view');
@@ -427,7 +457,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 notifDropdown.classList.toggle('hidden');
                 if (!notifDropdown.classList.contains('hidden')) {
                     Storage.markNotificationsRead();
-                    renderNotifications();
                 }
             });
         }
@@ -436,7 +465,6 @@ document.addEventListener('DOMContentLoaded', () => {
             markReadBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 Storage.markNotificationsRead();
-                renderNotifications();
             });
         }
 
@@ -487,7 +515,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 replyModal.classList.remove('active');
                 replyForm.reset();
-                if (currentView === 'messages') renderMessages();
             });
         }
 
@@ -576,9 +603,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Reset Stars to 5
                 starInput.querySelectorAll('i').forEach(s => { s.classList.add('ph-fill'); s.classList.remove('ph'); });
                 revRating.value = 5;
-
-                // Close after a brief moment or just refresh view
-                renderView(currentView, searchInput.value);
             });
         }
 
@@ -681,19 +705,32 @@ document.addEventListener('DOMContentLoaded', () => {
         propImageFile.addEventListener('change', async (e) => {
             const files = Array.from(e.target.files).slice(0, 5); // Max 5 images
             if (files.length > 0) {
-                imagePreviewContainer.innerHTML = '';
+                imagePreviewContainer.innerHTML = '<div style="padding:1rem; width:100%; text-align:center; color:var(--text-muted);"><i class="ph ph-spinner ph-spin"></i> Uploading to Google Drive...</div>';
                 imagePreviewContainer.style.display = 'flex';
-                const base64Array = [];
+                const linksArray = [];
                 
-                for(let file of files) {
-                    const base64Str = await compressImage(file);
-                    base64Array.push(base64Str);
-                    const img = document.createElement('img');
-                    img.src = base64Str;
-                    Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px' });
-                    imagePreviewContainer.appendChild(img);
+                try {
+                    for(let file of files) {
+                        const link = await Storage.uploadImageToDrive(file);
+                        linksArray.push(link);
+                    }
+                    
+                    imagePreviewContainer.innerHTML = '';
+                    for(let link of linksArray) {
+                        const img = document.createElement('img');
+                        img.src = link;
+                        Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px' });
+                        imagePreviewContainer.appendChild(img);
+                    }
+                    propImageHidden.value = JSON.stringify(linksArray);
+                } catch(error) {
+                    let msg = error.message;
+                    if (msg.includes('token') || msg.includes('Google Drive access')) {
+                        msg = `<i class="ph ph-lock-key"></i> Drive access expired. <a href="#" onclick="window.reauthorizeDrive(); return false;" style="color:var(--primary); text-decoration:underline; font-weight:bold;">Re-authorize now</a>`;
+                    }
+                    imagePreviewContainer.innerHTML = `<div style="padding:1rem; color:var(--danger); text-align:center; width:100%; border-radius:8px; background: rgba(220, 38, 38, 0.05); border: 1px solid rgba(220, 38, 38, 0.2);">${msg}</div>`;
+                    propImageHidden.value = '';
                 }
-                propImageHidden.value = JSON.stringify(base64Array);
             } else {
                 imagePreviewContainer.style.display = 'none';
                 propImageHidden.value = '';
@@ -927,29 +964,6 @@ document.addEventListener('DOMContentLoaded', () => {
         navItems.forEach(n => n.classList.remove('active'));
         const target = document.querySelector(`[data-view="${view}"]`);
         if (target) target.classList.add('active');
-    }
-
-    function processImageFileAsync(file) {
-        return new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = (e) => {
-                const img = new Image();
-                img.src = e.target.result;
-                img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    const MAX_WIDTH = 800;
-                    let width = img.width;
-                    let height = img.height;
-                    if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, width, height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.8));
-                };
-            };
-        });
     }
 
     // --- Core Rendering Engine ---
@@ -1347,6 +1361,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderProperties(cityFilter = null, searchQuery = '') {
         let properties = Storage.getProperties();
+
+        // RBAC Filtering (Fraud Prevention Sandbox)
+        if (currentUser.role === 'Buyer') {
+            properties = properties.filter(p => p.status === 'Available');
+        } else if (currentUser.role === 'Seller') {
+            properties = properties.filter(p => p.status !== 'Pending' || p.ownerId === currentUser.id);
+        }
+        // Admin sees all, including all Pending listings
 
         if (cityFilter) properties = properties.filter(p => p.city === cityFilter);
         
@@ -1831,6 +1853,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${distance !== null ? `<span class="badge" style="background: var(--success); color: white; border: none;"><i class="ph ph-navigation-arrow"></i> ${distance.toFixed(1)} km</span>` : ''}
                     </div>
                     ${ratingHTML}
+                    ${(role === 'Admin' && prop.status === 'Pending') ? `
+                        <button class="approve-float-btn approve-btn shadow-hover" data-id="${prop.id}" title="Approve Listing" style="position: absolute; top: 1rem; left: 1rem; z-index: 10; background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 20px; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; box-shadow: var(--shadow-lg);">
+                            <i class="ph-fill ph-check-circle"></i> APPROVE
+                        </button>
+                    ` : ''}
                     <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" data-id="${prop.id}" title="Compare Property" style="right: 3.5rem;">
                         <i class="ph ph-scales"></i>
                     </button>
@@ -1850,6 +1877,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
 
                     <div class="card-title">${prop.title}</div>
+                    ${prop.projectName ? `<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 0.25rem;"><i class="ph ph-buildings"></i> ${prop.projectName}</div>` : ''}
                     <div class="card-location"><i class="ph ph-map-pin"></i> ${prop.address}, ${prop.city}</div>
                     
                     <div class="card-separator"></div>
@@ -1909,38 +1937,32 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
-    function getSimilarProperties(sourceId) {
-        const source = Storage.getPropertyById(sourceId);
-        if (!source) return [];
-
-        let allProps = Storage.getProperties();
+    function getSimilarProperties(property) {
+        const all = Storage.getProperties().filter(p => p.id !== property.id);
         
-        return allProps
-            .filter(p => p.id !== sourceId && p.status === 'Available')
-            .map(p => {
-                let score = 0;
-                
-                // Hard Requirements (Weight: Mandatory multipliers)
-                if (p.city !== source.city) return null; // Must be same city
-                if (p.type !== source.type) return null; // Must be same type (Sale/Rent)
+        const scored = all.map(p => {
+            let score = 0;
+            if (p.category === property.category) score += 40;
+            if (p.type === property.type) score += 30;
+            if (p.bhk === property.bhk) score += 20;
+            if (p.city === property.city) score += 50;
+            
+            // Project bonus
+            if (p.projectName && property.projectName && p.projectName === property.projectName) score += 60;
 
-                // 1. Price Similarity (Weight 40)
-                const priceDiff = Math.abs(p.price - source.price);
-                const priceMatch = Math.max(0, 1 - (priceDiff / source.price));
-                score += priceMatch * 40;
+            // Recency weighting
+            const hoursOld = (Date.now() - (p.date ? new Date(p.date).getTime() : 0)) / (1000 * 3600);
+            if (hoursOld < 24) score += 15;
+            else if (hoursOld < 168) score += 5;
 
-                // 2. BHK Match (Weight 30)
-                if (p.bhk === source.bhk) score += 30;
-                else if (p.bhk && source.bhk && Math.abs(parseInt(p.bhk) - parseInt(source.bhk)) === 1) score += 15;
+            return { prop: p, score };
+        });
 
-                // 3. Category Match (Weight 30)
-                if (p.category === source.category) score += 30;
-
-                return { ...p, _score: score };
-            })
-            .filter(p => p !== null && p._score > 40) // Threshold for relevance
-            .sort((a, b) => b._score - a._score)
-            .slice(0, 3);
+        return scored
+            .filter(item => item.score > 50)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 4)
+            .map(item => item.prop);
     }
 
     // --- Export Functions ---
@@ -2214,6 +2236,13 @@ document.addEventListener('DOMContentLoaded', () => {
  
         let properties = Storage.getProperties();
         
+        // RBAC Filtering (Fraud Prevention Sandbox)
+        if (currentUser.role === 'Buyer') {
+            properties = properties.filter(p => p.status === 'Available');
+        } else if (currentUser.role === 'Seller') {
+            properties = properties.filter(p => p.status !== 'Pending' || p.ownerId === currentUser.id);
+        }
+
         // Apply Global Filters
         if (currentFilterCity) properties = properties.filter(p => p.city === currentFilterCity);
         if (searchInput.value) {
@@ -2318,6 +2347,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const tray = document.getElementById('compareTray');
         const count = document.getElementById('compareCount');
         const listTray = document.getElementById('compareListTray');
+        const modal = document.getElementById('compareModal');
+        const modalContent = modal?.querySelector('.modal');
 
         count.textContent = compareList.length;
 
@@ -2345,7 +2376,6 @@ document.addEventListener('DOMContentLoaded', () => {
         compareList = [];
         saveCompareState();
         updateCompareTray();
-        renderView(currentView, searchInput.value); // Refresh to update button states
     };
 
     function renderComparisonTable() {
@@ -2356,8 +2386,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const container = document.getElementById('comparisonTableContainer');
         const modal = document.getElementById('compareModal');
+        const modalContent = modal.querySelector('.modal');
+        if (modalContent) modalContent.classList.add('modal-lg');
 
-        let html = `<table class="comparison-table"><thead><tr><th>Feature</th>`;
+        let html = `<div class="comparison-table-wrapper"><table class="comparison-table"><thead><tr><th>Feature</th>`;
         
         compareList.forEach(p => {
             const firstImg = (p.images && p.images.length > 0) ? p.images[0] : (p.image || '');
@@ -2411,7 +2443,7 @@ document.addEventListener('DOMContentLoaded', () => {
             html += `</tr>`;
         });
 
-        html += `</tbody></table>`;
+        html += `</tbody></table></div>`;
         container.innerHTML = html;
         modal.classList.add('active');
     }
@@ -2438,6 +2470,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Set search to ID for precise filtering in the grid
             searchInput.value = prop.id; 
             renderView(view, prop.id); 
+            updateSeoMetadata(prop);
         }
     };
 
@@ -2456,10 +2489,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.stopPropagation();
                 if (confirm('Are you sure you want to delete this listing?')) {
                     const success = Storage.deleteProperty(e.currentTarget.getAttribute('data-id'));
-                    if(success) {
-                        renderView(currentView, searchInput.value); 
-                        populateCitiesDatalist(); 
-                    } else {
+                    if(!success) {
                         alert("Unauthorized Action");
                     }
                 }
@@ -2471,7 +2501,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
                 Storage.toggleFavorite(id);
-                renderView(currentView, searchInput.value);
             });
         });
 
@@ -2490,11 +2519,19 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', async (e) => {
                 const id = e.currentTarget.getAttribute('data-id');
                 const prop = Storage.getPropertyById(id);
-                if (prop) {
-                    const btnIcon = e.currentTarget.querySelector('i');
-                    btnIcon.className = 'ph ph-spinner ph-spin'; 
-                    await generateFlyer(prop);
-                    btnIcon.className = 'ph ph-file-pdf'; 
+                if (prop) await generateFlyer(prop);
+            });
+        });
+
+        parent.querySelectorAll('.approve-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.getAttribute('data-id');
+                if (confirm('Approve this listing for public view?')) {
+                    const success = await Storage.approveProperty(id);
+                    if (success) {
+                        renderView(currentView, searchInput.value);
+                    }
                 }
             });
         });
@@ -2571,6 +2608,7 @@ document.addEventListener('DOMContentLoaded', () => {
             modalTitle.textContent = 'Edit Listing';
             document.getElementById('propId').value = property.id;
             document.getElementById('propTitle').value = property.title;
+            document.getElementById('propProjectName').value = property.projectName || '';
             document.getElementById('propCity').value = property.city;
             document.getElementById('propPrice').value = property.price;
             document.getElementById('propArea').value = property.area || '';
@@ -2632,8 +2670,9 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         
         const id = document.getElementById('propId').value;
-        const title   = document.getElementById('propTitle').value.trim();
-        const city    = document.getElementById('propCity').value.trim();
+        const title       = document.getElementById('propTitle').value.trim();
+        const projectName = document.getElementById('propProjectName').value.trim();
+        const city        = document.getElementById('propCity').value.trim();
         const address = document.getElementById('propAddress').value.trim();
         const price   = Number(document.getElementById('propPrice').value);
         const pinCode = document.getElementById('propPinCode').value.trim();
@@ -2648,6 +2687,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const newProperty = {
             id: id || undefined,
             title,
+            projectName,
             city,
             price,
             pinCode,
@@ -2677,8 +2717,6 @@ document.addEventListener('DOMContentLoaded', () => {
         currentSort = 'newest';
         currentTypeFilter = '';
         currentStatusFilter = '';
-        renderView('properties');
-        renderNotifications();
     }
 
     function populateCitiesDatalist() {
@@ -2911,4 +2949,72 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.onerror = () => alert("Error reading backup file.");
         reader.readAsText(file);
     }
+
+    function updateSeoMetadata(prop = null) {
+        const titleTag = document.title;
+        const metaDesc = document.querySelector('meta[name="description"]');
+        let schemaScript = document.getElementById('seo-json-ld');
+        
+        if (!schemaScript) {
+            schemaScript = document.createElement('script');
+            schemaScript.id = 'seo-json-ld';
+            schemaScript.type = 'application/ld+json';
+            document.head.appendChild(schemaScript);
+        }
+
+        if (prop) {
+            const title = `${prop.title} | Estato V12.1`;
+            const desc = `${prop.type} in ${prop.city} - ${prop.bhk} BHK, ${prop.area} sqft. ${prop.description.substring(0, 100)}...`;
+            
+            document.title = title;
+            if (metaDesc) metaDesc.setAttribute('content', desc);
+
+            // Rich Snippet (RealEstateListing)
+            const ld = {
+                "@context": "https://schema.org/",
+                "@type": "RealEstateListing",
+                "name": prop.title,
+                "description": prop.description,
+                "datePosted": prop.date || new Date().toISOString(),
+                "price": prop.price,
+                "priceCurrency": "INR",
+                "address": {
+                    "@type": "PostalAddress",
+                    "addressLocality": prop.city,
+                    "streetAddress": prop.address
+                },
+                "numberOfRooms": prop.rooms || prop.bhk,
+                "floorSize": {
+                    "@type": "QuantitativeValue",
+                    "value": prop.area,
+                    "unitCode": "FTK"
+                }
+            };
+            schemaScript.textContent = JSON.stringify(ld);
+        } else {
+            document.title = "Estato V12.1 | Premium Real Estate Marketplace";
+            if (metaDesc) metaDesc.setAttribute('content', "Estato V12.1 — The definitive premium real estate marketplace. Real-time listings, proximity search, and seamless secure property management.");
+            schemaScript.textContent = JSON.stringify({
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                "name": "Estato",
+                "url": window.location.origin
+            });
+        }
+    }
+
+    // Expose to global if needed
+    window.reauthorizeDrive = async () => {
+        const user = Storage.getCurrentUser();
+        const success = await Storage.loginWithGoogle(user ? user.role : 'Seller', false);
+        if (success) {
+            alert('Re-authorization successful! You can now upload images.');
+            // Refresh preview area if it showed the error
+            if (imagePreviewContainer) imagePreviewContainer.innerHTML = '';
+        } else {
+            alert('Authorization failed. Please ensure popups are allowed.');
+        }
+    };
+
+    window.updateSeoMetadata = updateSeoMetadata;
 });

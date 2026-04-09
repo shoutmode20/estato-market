@@ -330,34 +330,53 @@ body {
     border: 1px solid rgba(255,255,255,0.2);
 }
 
-/* Comparison Table */
+.comparison-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+}
 .comparison-table {
     width: 100%;
+    min-width: 600px;
     border-collapse: collapse;
     background: white;
 }
 .comparison-table th, .comparison-table td {
-    padding: 1.5rem;
+    padding: 1.25rem 1.5rem;
     border: 1px solid var(--border-color);
     text-align: left;
+    vertical-align: middle;
 }
 .comparison-table th {
     background: var(--bg-main);
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: 0.75rem;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    width: 200px;
+    width: 160px;
+    position: sticky;
+    left: 0;
+    z-index: 5;
 }
 .comparison-table .prop-header {
     text-align: center;
+    background: #fff;
+    min-width: 250px;
 }
 .comparison-table img {
     width: 100%;
-    height: 120px;
+    height: 140px;
     object-fit: cover;
     border-radius: var(--radius-sm);
     margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+.comparison-table .price-cell {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--primary);
 }
 
 /* Map Marker Styles */
@@ -957,14 +976,19 @@ body {
 }
 
 .modal {
-    width: 100%;
-    max-width: 650px;
+    width: 95%;
+    max-width: 680px;
+    background: var(--bg-surface);
     border-radius: var(--radius-lg);
     transform: scale(0.95);
     transition: var(--transition);
     max-height: 90vh;
     overflow-y: auto;
     box-shadow: var(--shadow-lg);
+    position: relative;
+}
+.modal.modal-lg {
+    max-width: 1100px;
 }
 
 .modal-overlay.active .modal {

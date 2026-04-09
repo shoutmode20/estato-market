@@ -22,6 +22,17 @@ if (!firebase.apps.length) {
 const db = firebase.database();
 const auth = firebase.auth();
 const provider = new firebase.auth.GoogleAuthProvider();
+provider.addScope('https://www.googleapis.com/auth/drive.file');
+
+// Enable Firebase Realtime Database Persistence
+try {
+    db.ref().keepSynced(true);
+} catch(e) {
+    console.warn("Persistence failed to initialize:", e);
+}
+
+// Store OAuth Credential Memory
+let _driveAccessToken = null;
 
 // In-memory cache for instant UI rendering
 let _memCache = {
@@ -36,6 +47,7 @@ let _memCache = {
 };
 
 let _syncCallback = null;
+let _dataChangeListeners = [];
 
 // Local formatter for notification messages
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
@@ -46,6 +58,8 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
 
 // ─── Public Storage API ───────────────────────────────────────────
 const Storage = {
+    getCurrentUser() { return _memCache.currentUser; },
+
     async initDrive(syncCb) {
         _syncCallback = syncCb;
         return true;
@@ -69,6 +83,9 @@ const Storage = {
                 } else {
                     const result = await auth.signInWithPopup(provider);
                     user = result.user;
+                    if (result.credential && result.credential.accessToken) {
+                        _driveAccessToken = result.credential.accessToken;
+                    }
                 }
             }
 
@@ -120,61 +137,65 @@ const Storage = {
         const uid = _memCache.currentUser.id;
         const role = _memCache.currentUser.role;
         
+        console.log("[Estato Firebase] Initializing Real-time Listeners...");
+        
         try {
-            // Load properties (Global)
-            const propsSnap = await db.ref('properties').get();
-            if (propsSnap.exists()) {
-                const propsData = propsSnap.val();
-                _memCache.properties = Object.values(propsData);
-            } else {
-                _memCache.properties = [];
-            }
-            
-            // Recompute cities
-            const propCities = _memCache.properties.map(p => p.city).filter(Boolean);
-            _memCache.cities = [...new Set([..._memCache.cities, ...propCities])];
+            // 1. Listen for Latest Properties (Real-time sync for the first batch)
+            db.ref('properties').limitToLast(20).on('value', (snap) => {
+                const data = snap.val();
+                const latestBatch = data ? Object.values(data) : [];
+                this.mergeProperties(latestBatch);
+                
+                this.notifyListeners();
+            });
 
-            // Load user-specific favorites
-            const favSnap = await db.ref('favorites/' + uid).get();
-            _memCache.favorites = favSnap.exists() ? (favSnap.val().ids || []) : [];
+            // 2. Listen for user-specific favorites
+            db.ref('favorites/' + uid).on('value', (snap) => {
+                _memCache.favorites = snap.exists() ? (snap.val().ids || []) : [];
+                this.notifyListeners();
+            });
 
-            // Load inquiries
-            const inqSnap = await db.ref('inquiries').get();
-            if (inqSnap.exists()) {
-                const allInquiries = Object.values(inqSnap.val());
-                if (role === 'Admin') {
-                    _memCache.inquiries = allInquiries;
-                } else if (role === 'Owner' || role === 'Seller') {
-                    _memCache.inquiries = allInquiries.filter(i => i.ownerId === uid);
+            // 3. Listen for inquiries
+            db.ref('inquiries').on('value', (snap) => {
+                if (snap.exists()) {
+                    const allInquiries = Object.values(snap.val());
+                    if (role === 'Admin') {
+                        _memCache.inquiries = allInquiries;
+                    } else if (role === 'Seller') {
+                        _memCache.inquiries = allInquiries.filter(i => i.ownerId === uid);
+                    } else {
+                        _memCache.inquiries = allInquiries.filter(i => i.buyerId === uid);
+                    }
                 } else {
-                    _memCache.inquiries = allInquiries.filter(i => i.buyerId === uid);
+                    _memCache.inquiries = [];
                 }
-            } else {
-                _memCache.inquiries = [];
-            }
+                this.notifyListeners();
+            });
 
-            // Load personal notifications
-            const notifSnap = await db.ref('notifications/' + uid).get();
-            _memCache.notifications = notifSnap.exists() ? (notifSnap.val().items || []) : [];
+            // 4. Listen for personal notifications
+            db.ref('notifications/' + uid).on('value', (snap) => {
+                _memCache.notifications = snap.exists() ? (snap.val().items || []) : [];
+                this.notifyListeners();
+            });
 
-            // Load platform activities
-            const actSnap = await db.ref('activities').orderByChild('timestamp').limitToLast(100).get();
-            if (actSnap.exists()) {
-                _memCache.activities = Object.values(actSnap.val()).reverse(); // Newest first
-            } else {
-                _memCache.activities = [];
-            }
+            // 5. Listen for platform activities (Limit to latest 100)
+            db.ref('activities').orderByChild('timestamp').limitToLast(100).on('value', (snap) => {
+                if (snap.exists()) {
+                    _memCache.activities = Object.values(snap.val()).reverse(); // Newest first
+                } else {
+                    _memCache.activities = [];
+                }
+                this.notifyListeners();
+            });
             
-            // Load reviews
-            const revSnap = await db.ref('reviews').get();
-            if (revSnap.exists()) {
-                _memCache.reviews = Object.values(revSnap.val());
-            } else {
-                _memCache.reviews = [];
-            }
+            // 6. Listen for reviews
+            db.ref('reviews').on('value', (snap) => {
+                _memCache.reviews = snap.exists() ? Object.values(snap.val()) : [];
+                this.notifyListeners();
+            });
 
         } catch(e) {
-            console.error("[Estato Firebase] Failed to hydrate data", e);
+            console.error("[Estato Firebase] Failed to initialize listeners", e);
         }
     },
 
@@ -186,9 +207,83 @@ const Storage = {
     getCurrentUser() { return _memCache.currentUser; },
     getData() { return _memCache; },
     hasPendingSync() { return false; },
+    async _flushPendingSync() { return true; }, // Stub for compatibility
+
+    /** RESTORE DATA FROM BACKUP */
+    async restoreData(data) {
+        if (!data || typeof data !== 'object') return false;
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            // Overwrite entire database (Careful!)
+            await db.ref().set(data);
+            
+            // Re-hydrate local cache
+            _memCache = { ..._memCache, ...data };
+            this.notifyListeners();
+            
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch(e) {
+            console.error("Restore failed:", e);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
+    /** UI SUBSCRIPTION MECHANISM */
+    subscribe(callback) {
+        if (typeof callback === 'function') {
+            _dataChangeListeners.push(callback);
+        }
+    },
+
+    notifyListeners() {
+        _dataChangeListeners.forEach(cb => cb(_memCache));
+    },
 
     // ── Properties Logic ──
     getProperties() { return _memCache.properties; },
+
+    mergeProperties(newBatch) {
+        const existing = new Map(_memCache.properties.map(p => [p.id, p]));
+        newBatch.forEach(p => existing.set(p.id, p));
+        
+        // Sort by date/ID descending
+        _memCache.properties = Array.from(existing.values())
+            .sort((a, b) => b.id.localeCompare(a.id));
+
+        // Recompute cities
+        const propCities = _memCache.properties.map(p => p.city).filter(Boolean);
+        _memCache.cities = [...new Set(['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune', ...propCities])];
+    },
+
+    async loadMoreProperties() {
+        if (_memCache.properties.length === 0) return;
+        
+        // Get the oldest ID we have (they are sorted descending)
+        const oldestId = _memCache.properties[_memCache.properties.length - 1].id;
+        console.log("[Storage] Fetching properties before:", oldestId);
+
+        try {
+            const snap = await db.ref('properties')
+                .orderByKey()
+                .endBefore(oldestId)
+                .limitToLast(20)
+                .get();
+
+            if (snap.exists()) {
+                const data = snap.val();
+                this.mergeProperties(Object.values(data));
+                this.notifyListeners();
+                return true;
+            }
+            return false;
+        } catch (e) {
+            console.error("[Storage] Paginated fetch failed:", e);
+            return false;
+        }
+    },
 
     getPropertyById(id) {
         return this.getProperties().find(p => p.id === id);
@@ -199,6 +294,11 @@ const Storage = {
         property.id = 'prop_' + Date.now();
         property.ownerId = _memCache.currentUser.id;
         property.priceHistory = [{ price: property.price, date: new Date().toISOString() }];
+        
+        // Enforce Pending status for new listings (Fraud Prevention)
+        if (_memCache.currentUser.role !== 'Admin') {
+            property.status = 'Pending';
+        }
 
         // Optimistic UI Update
         _memCache.properties.push(property);
@@ -252,23 +352,46 @@ const Storage = {
 
     async deleteProperty(id) {
         if (_syncCallback) _syncCallback('syncing');
-        const prop = _memCache.properties.find(p => p.id === id);
-        if (!prop) return false;
+        const index = _memCache.properties.findIndex(p => p.id === id);
+        if (index === -1) return false;
         
+        const prop = _memCache.properties[index];
         const isAuthorized = _memCache.currentUser && (_memCache.currentUser.role === 'Admin' || prop.ownerId === _memCache.currentUser.id);
         if (!isAuthorized) return false;
-        
-        _memCache.properties = _memCache.properties.filter(p => p.id !== id);
-        
+
+        _memCache.properties.splice(index, 1);
         try {
             await db.ref('properties/' + id).remove();
-            this.logActivity('DELETE_PROPERTY', `Deleted property: ${prop.title} (${id})`);
+            this.logActivity('DELETE_PROPERTY', `Archived listing: ${prop.title} (${id})`);
             if (_syncCallback) _syncCallback('synced');
+            return true;
         } catch(e) {
             console.error(e);
             if (_syncCallback) _syncCallback('error');
+            return false;
         }
-        return true;
+    },
+
+    async approveProperty(id) {
+        if (_syncCallback) _syncCallback('syncing');
+        if (_memCache.currentUser.role !== 'Admin') return false;
+
+        const index = _memCache.properties.findIndex(p => p.id === id);
+        if (index === -1) return false;
+
+        _memCache.properties[index].status = 'Available';
+
+        try {
+            await db.ref('properties/' + id).update({ status: 'Available' });
+            this.logActivity('APPROVE_PROPERTY', `Admin approved listing: ${_memCache.properties[index].title}`);
+            this.addNotification(`Listing Approved: ${_memCache.properties[index].title}`, 'new_listing', { id: id });
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch(e) {
+            console.error(e);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
     },
 
     // ── Favorites ──
@@ -511,5 +634,76 @@ const Storage = {
             const updated = [propertyId, ...filtered].slice(0, 10);
             localStorage.setItem(`estato_recent_v1_${userId}`, JSON.stringify(updated));
         } catch(e) {}
+    },
+
+    // ── Google Drive Sync ──
+    async uploadImageToDrive(file) {
+        if (!_driveAccessToken) {
+            throw new Error("No Google Drive access token. Please re-login to authorize Drive access.");
+        }
+
+        try {
+            // STEP 1: Simple Media Upload (Raw file body)
+            // This is the most compatible way to send binary data to Google
+            const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=media', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + _driveAccessToken,
+                    'Content-Type': file.type || 'image/jpeg'
+                },
+                body: file
+            });
+
+            if (!uploadRes.ok) {
+                const errorData = await uploadRes.json().catch(() => ({ error: { message: "Media Upload Failed" } }));
+                throw new Error(`Media Upload Failed: ${errorData.error ? errorData.error.message : uploadRes.statusText}`);
+            }
+
+            const driveFile = await uploadRes.json();
+            const fileId = driveFile.id;
+
+            // STEP 2: Metadata Update (PATCH)
+            // Now that the file exists, we set its name and ensure it's in the root
+            const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,webViewLink,webContentLink`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': 'Bearer ' + _driveAccessToken,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: file.name || 'estato_property_image.jpg',
+                    addParents: 'root'
+                })
+            });
+
+            if (!metaRes.ok) {
+                console.warn("[Drive] Metadata update failed, but media was uploaded.");
+            }
+
+            const data = await metaRes.json();
+            
+            // STEP 3: Permissions Update (Public Reader)
+            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + _driveAccessToken,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    role: 'reader',
+                    type: 'anyone'
+                })
+            });
+
+            // Use webContentLink to allow direct embedding if possible, or webViewLink
+            return data.webContentLink || data.webViewLink;
+
+        } catch (e) {
+            console.error("[Drive Logic Error]", e);
+            if (e.message === 'Failed to fetch') {
+                throw new Error("Failed to fetch: Service Worker or Network blocked the request. Please Hard Refresh (Ctrl+F5) and ensure your internet is stable.");
+            }
+            throw e;
+        }
     }
 };
