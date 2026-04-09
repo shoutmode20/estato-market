@@ -1,4 +1,4 @@
-const CACHE_NAME = 'estato-v12.4';
+const CACHE_NAME = 'estato-v12.5';
 const ASSETS = [
     './',
     './index.html',

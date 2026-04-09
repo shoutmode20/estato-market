@@ -695,8 +695,8 @@ const Storage = {
                 })
             });
 
-            // Use webContentLink to allow direct embedding if possible, or webViewLink
-            return data.webContentLink || data.webViewLink;
+            // Use the Thumbnail API for direct browser visibility (sz=w1000 for high quality)
+            return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
 
         } catch (e) {
             console.error("[Drive Logic Error]", e);
