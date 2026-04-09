@@ -1413,7 +1413,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (currentSort === 'price-high') {
             properties.sort((a, b) => b.price - a.price);
         } else {
-            properties.reverse(); // Newest first (array is in insertion order)
+            // Newest first - Explicity sort by numeric part of the ID (timestamp)
+            properties.sort((a, b) => {
+                const idA = a.id ? a.id.replace('prop_', '') : '0';
+                const idB = b.id ? b.id.replace('prop_', '') : '0';
+                return idB.localeCompare(idA);
+            });
         }
 
         let headerText = cityFilter ? `Listings in ${cityFilter}` : 'All Featured Listings';
@@ -1858,7 +1863,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <i class="ph-fill ph-check-circle"></i> APPROVE
                         </button>
                     ` : ''}
-                    <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" data-id="${prop.id}" title="Compare Property" style="right: 3.5rem;">
+                    <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" onclick="window.toggleCompare('${prop.id}', event)" title="Compare Property" style="right: 3.5rem;">
                         <i class="ph ph-scales"></i>
                     </button>
                     <button class="fav-float-btn fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}" title="Save to My Properties">
@@ -2312,7 +2317,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 fillColor: '#ea580c',
                 fillOpacity: 0.2
             }).addTo(map);
-            markers.push(centerMarker);
+                markers.push(centerMarker);
         } else if (bounds.length > 0 && !currentFilterCity) {
             map.fitBounds(bounds, { padding: [50, 50] });
         } else if (currentFilterCity) {
@@ -2321,8 +2326,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- V11 Comparison Logic ---
-    function toggleCompare(id) {
+    function toggleCompare(id, event) {
+        if (event) event.stopPropagation();
+        
         const prop = Storage.getPropertyById(id);
+        if (!prop) return;
+
         const index = compareList.findIndex(p => p.id === id);
 
         if (index === -1) {
