@@ -962,6 +962,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Core Rendering Engine ---
     function renderView(viewName, searchQuery = '') {
         currentView = viewName;
+        window.scrollTo(0, 0);
 
         // Clean up Leaflet map instance when navigating away from properties
         // (the DOM node will be destroyed, so we must destroy the map object too)
@@ -1137,15 +1138,20 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
 
             ${currentUser.role === 'Admin' ? `
-                ${allProps.filter(p => p.status === 'Pending').length > 0 ? `
                 <div class="section-header" style="margin-top: 3rem;">
                     <h3><i class="ph-duotone ph-clock"></i> Pending Approvals</h3>
                 </div>
+                ${allProps.filter(p => p.status === 'Pending').length > 0 ? `
                 <div class="recent-scroll-container" style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1.5rem; margin-bottom: 2rem;">
                     ${allProps.filter(p => p.status === 'Pending').map((p, i) => `<div style="min-width: 300px;">${generatePropertyCard(p, i)}</div>`).join('')}
                 </div>
+                ` : `
+                <div class="surface-panel" style="padding: 2rem; text-align: center; border: 1px dashed var(--border-color); color: var(--text-muted); margin-bottom: 2rem;">
+                    <i class="ph-duotone ph-check-circle" style="font-size: 3rem; color: var(--success); margin-bottom: 1rem;"></i>
+                    <p>All caught up! There are no listings pending approval.</p>
+                </div>
+                `}
                 <div class="card-separator"></div>
-                ` : ''}
 
                 <div class="section-header" style="margin-top: 2rem;">
                     <h3>Developer & Admin Tools</h3>
@@ -1869,16 +1875,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${distance !== null ? `<span class="badge" style="background: var(--success); color: white; border: none;"><i class="ph ph-navigation-arrow"></i> ${distance.toFixed(1)} km</span>` : ''}
                     </div>
                     ${ratingHTML}
-                    ${(role === 'Admin' && prop.status === 'Pending') ? `
-                        <div style="position: absolute; top: 1rem; left: 1rem; z-index: 10; display: flex; flex-direction: column; gap: 0.25rem;">
-                            <button class="approve-btn shadow-hover" data-id="${prop.id}" title="Approve Listing" style="background: var(--success); color: white; border: none; padding: 0.35rem 0.75rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; box-shadow: var(--shadow-md);">
-                                <i class="ph-fill ph-check-circle"></i> APPROVE
-                            </button>
-                            <button class="reject-btn shadow-hover" data-id="${prop.id}" title="Reject Listing" style="background: var(--danger); color: white; border: none; padding: 0.35rem 0.75rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; box-shadow: var(--shadow-md);">
-                                <i class="ph-fill ph-x-circle"></i> REJECT
-                            </button>
-                        </div>
-                    ` : ''}
                     <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" onclick="window.toggleCompare('${prop.id}', event)" title="Compare Property" style="right: 3.5rem;">
                         <i class="ph ph-scales"></i>
                     </button>
@@ -1910,7 +1906,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map">
                             <i class="ph ph-map-pin-line"></i>
                         </a>
-                        ${isOwnerOfListing ? `
+                        ${(role === 'Admin' && prop.status === 'Pending') ? `
+                            <button class="btn approve-btn shadow-hover" data-id="${prop.id}" style="flex: 1; background: var(--success); color: white; border: none;"><i class="ph-fill ph-check-circle"></i> Approve</button>
+                            <button class="btn btn-danger reject-btn shadow-hover" data-id="${prop.id}" style="flex: 1;"><i class="ph-fill ph-x-circle"></i> Reject</button>
+                        ` : isOwnerOfListing ? `
                             <button class="btn btn-secondary edit-btn shadow-hover" data-id="${prop.id}" style="flex: 1;">Edit</button>
                             <button class="btn btn-danger btn-icon delete-btn shadow-hover" data-id="${prop.id}" title="Delete Listing"><i class="ph ph-trash"></i></button>
                         ` : `
@@ -2645,8 +2644,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         populateSelect('propType', FILTER_CONFIG.types, property ? property.type : 'Sale');
         populateSelect('propCategory', FILTER_CONFIG.categories, property ? property.category : 'Apartment');
-        populateSelect('propStatus', FILTER_CONFIG.statuses, property ? property.status : 'Available');
+        populateSelect('propStatus', FILTER_CONFIG.statuses, property ? property.status : 'Pending');
         populateSelect('propBhk', FILTER_CONFIG.bhkLayouts, property ? property.bhk : '2 BHK');
+
+        // Hide Status dropdown entirely for Sellers
+        if (currentUser && currentUser.role === 'Seller') {
+            document.getElementById('propStatus').closest('.form-group').style.display = 'none';
+        } else {
+            document.getElementById('propStatus').closest('.form-group').style.display = 'block';
+        }
         
         if (property) {
             modalTitle.textContent = 'Edit Listing';
@@ -2741,7 +2747,7 @@ document.addEventListener('DOMContentLoaded', () => {
             area: Number(document.getElementById('propArea').value) || 0,
             address,
             type: document.getElementById('propType').value,
-            status: document.getElementById('propStatus').value,
+            status: (currentUser && currentUser.role === 'Admin') ? document.getElementById('propStatus').value : 'Pending',
             category: document.getElementById('propCategory').value,
             description: document.getElementById('propDescription').value.trim(),
             images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []

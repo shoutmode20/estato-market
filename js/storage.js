@@ -363,6 +363,12 @@ const Storage = {
         try {
             await db.ref('properties/' + id).remove();
             this.logActivity('DELETE_PROPERTY', `Archived listing: ${prop.title} (${id})`);
+            
+            // If Admin deleted someone else's property, notify them
+            if (_memCache.currentUser.role === 'Admin' && prop.ownerId !== _memCache.currentUser.id) {
+                await this.sendUserNotification(prop.ownerId, `Your listing "${prop.title}" was removed by an Admin.`, 'danger', { id: id });
+            }
+
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch(e) {
