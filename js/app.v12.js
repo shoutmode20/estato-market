@@ -77,6 +77,57 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { if (toast.parentElement) toast.remove(); }, duration);
     }
 
+    /**
+     * Non-blocking confirm dialog. Replaces native confirm().
+     * @param {string} message - Question to ask
+     * @param {function} onConfirm - Called when user clicks confirm
+     * @param {function} [onCancel] - Called when user clicks cancel
+     */
+    function showConfirm(message, onConfirm, onCancel) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;`;
+        overlay.innerHTML = `
+            <div style="background:var(--bg-surface);border-radius:var(--radius-md);padding:2rem;max-width:420px;width:90%;box-shadow:var(--shadow-lg);border:1px solid var(--border-color);">
+                <div style="display:flex;align-items:flex-start;gap:1rem;margin-bottom:1.5rem;">
+                    <i class="ph-fill ph-warning-circle" style="color:var(--danger);font-size:1.5rem;flex-shrink:0;margin-top:2px;"></i>
+                    <p style="margin:0;color:var(--text-main);font-size:0.95rem;line-height:1.6;">${escapeHtml(message)}</p>
+                </div>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                    <button id="_cancelBtn" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:1px solid var(--border-color);background:var(--bg-main);color:var(--text-main);cursor:pointer;font-size:0.875rem;">Cancel</button>
+                    <button id="_confirmBtn" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:none;background:var(--danger);color:#fff;cursor:pointer;font-size:0.875rem;font-weight:600;">Confirm</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        overlay.querySelector('#_confirmBtn').onclick = () => { overlay.remove(); onConfirm(); };
+        overlay.querySelector('#_cancelBtn').onclick = () => { overlay.remove(); if (onCancel) onCancel(); };
+        overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); if (onCancel) onCancel(); } };
+    }
+
+    /**
+     * Non-blocking prompt dialog. Replaces native prompt().
+     * @param {string} message - Label for the input
+     * @param {function} callback - Called with the entered string, or null if cancelled
+     */
+    function showPrompt(message, callback) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;`;
+        overlay.innerHTML = `
+            <div style="background:var(--bg-surface);border-radius:var(--radius-md);padding:2rem;max-width:440px;width:90%;box-shadow:var(--shadow-lg);border:1px solid var(--border-color);">
+                <p style="margin:0 0 1rem 0;color:var(--text-main);font-size:0.95rem;line-height:1.6;">${escapeHtml(message)}</p>
+                <textarea id="_promptInput" rows="3" style="width:100%;padding:0.75rem;border:1px solid var(--border-color);border-radius:var(--radius-sm);font-size:0.875rem;background:var(--bg-main);color:var(--text-main);resize:vertical;box-sizing:border-box;" placeholder="Enter reason..."></textarea>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:1rem;">
+                    <button id="_promptCancel" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:1px solid var(--border-color);background:var(--bg-main);color:var(--text-main);cursor:pointer;font-size:0.875rem;">Cancel</button>
+                    <button id="_promptSubmit" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:none;background:var(--danger);color:#fff;cursor:pointer;font-size:0.875rem;font-weight:600;">Submit</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        const input = overlay.querySelector('#_promptInput');
+        input.focus();
+        overlay.querySelector('#_promptSubmit').onclick = () => { overlay.remove(); callback(input.value); };
+        overlay.querySelector('#_promptCancel').onclick = () => { overlay.remove(); callback(null); };
+        overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); callback(null); } };
+    }
+
     // Property Category Static Metadata
     const PROPERTY_METADATA = {
         'Apartment': { icon: 'ph-buildings', tags: ['High-rise', 'Security', 'Amenities'], avgPriceRange: '₹50L - ₹5Cr', color: 'blue' },
@@ -408,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function applyRBACToDOM() {
-        // Enforce strict element removal based on Role
+        if (!currentUser) return; // Guard: auth may not have resolved yet
         const adminElements = document.querySelectorAll('.admin-only');
         const role = currentUser.role;
 
@@ -1145,6 +1196,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Seller sees only their own, Admin sees all
         const allProps = EstatoStorage.getProperties();
         let recentProps = allProps;
+        if (!currentUser) return;
         if (currentUser.role === 'Seller') {
             recentProps = recentProps.filter(p => p.ownerId === currentUser.id);
         }
@@ -1453,19 +1505,22 @@ document.addEventListener('DOMContentLoaded', () => {
  
         // Radius Filtering
         if (currentRadiusCenter) {
+            // Use a local Map keyed by property ID to avoid mutating the in-memory cache objects
+            if (!renderProperties._distanceCache) renderProperties._distanceCache = new Map();
+            const dCache = renderProperties._distanceCache;
+            const cacheKey = `${currentRadiusCenter.lat},${currentRadiusCenter.lng}`;
+
             properties = properties.filter(p => {
-                // Use precise lat/lng or fallback to CITY_COORDS exact matching
                 const lat = p.lat || (CITY_COORDS[p.city] ? CITY_COORDS[p.city][0] : null);
                 const lng = p.lng || (CITY_COORDS[p.city] ? CITY_COORDS[p.city][1] : null);
                 if (lat === null || lng === null) return false;
 
-                // Optimization: Cache and only recalculate if the user's search center changes
-                if (p._centerLat !== currentRadiusCenter.lat || p._centerLng !== currentRadiusCenter.lng) {
-                    p._distance = getHaversineDistance(currentRadiusCenter.lat, currentRadiusCenter.lng, lat, lng);
-                    p._centerLat = currentRadiusCenter.lat; // Cache precise search center
-                    p._centerLng = currentRadiusCenter.lng;
+                const key = `${cacheKey}:${p.id}`;
+                if (!dCache.has(key)) {
+                    dCache.set(key, getHaversineDistance(currentRadiusCenter.lat, currentRadiusCenter.lng, lat, lng));
                 }
-                return p._distance <= currentRadiusKm;
+                p._distanceKm = dCache.get(key); // Ephemeral — only used this render pass
+                return p._distanceKm <= currentRadiusKm;
             });
         }
 
@@ -1473,7 +1528,7 @@ document.addEventListener('DOMContentLoaded', () => {
         properties = [...properties];
         if (currentRadiusCenter) {
             // Priority sort by proximity if radius active
-            properties.sort((a, b) => (a._distance || 0) - (b._distance || 0));
+            properties.sort((a, b) => (a._distanceKm || 0) - (b._distanceKm || 0));
         } else if (currentSort === 'price-low') {
             properties.sort((a, b) => a.price - b.price);
         } else if (currentSort === 'price-high') {
@@ -1553,7 +1608,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (properties.length === 0) {
             html += `<div class="empty-state" style="grid-column: 1 / -1;"><i class="ph-duotone ph-magnifying-glass"></i><p>No properties found matching criteria.</p></div>`;
         } else {
-            html += properties.map((p, i) => generatePropertyCard(p, i, (currentRadiusCenter && typeof p._distance === 'number') ? p._distance : null)).join('');
+            html += properties.map((p, i) => generatePropertyCard(p, i, (currentRadiusCenter && typeof p._distanceKm === 'number') ? p._distanceKm : null)).join('');
         }
 
         // Close the grid div
@@ -1719,7 +1774,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 <p style="color: var(--text-muted); margin-bottom: 1rem;">${currentUser.email}</p>
                 <div style="margin-top: 1rem;"><span class="badge sale" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Verified ${currentUser.role} Account</span></div>
                 
-                <div style="margin-top: 3rem; width: 100%; max-width: 300px;">
+                        <div style="margin-top: 1.5rem; width: 100%; max-width: 300px; display: flex; flex-direction: column; gap: 0.75rem;">
+                    ${currentUser.role !== 'Admin' ? `
+                    <button class="btn btn-secondary w-full shadow-hover" id="changeRoleBtn" style="border: 1px solid var(--primary); color: var(--primary);">
+                        <i class="ph ph-shuffle"></i> Switch to ${currentUser.role === 'Buyer' ? 'Seller' : 'Buyer'} Account
+                    </button>` : `
+                    <div style="font-size:0.8rem;color:var(--text-muted);text-align:center;"><i class="ph ph-lock-key"></i> Admin role cannot be changed here</div>`}
                     <button class="btn btn-secondary w-full shadow-hover" id="logoutBtn" style="border: 1px solid var(--border-color);">
                         <i class="ph ph-sign-out"></i> Switch Account / Logout
                     </button>
@@ -1741,8 +1801,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
         document.getElementById('logoutBtn').addEventListener('click', () => {
              EstatoStorage.logout();
-             location.reload(); // Hard reload to clear session
+             location.reload();
         });
+
+        // Role Change Button
+        const changeRoleBtn = document.getElementById('changeRoleBtn');
+        if (changeRoleBtn) {
+            changeRoleBtn.addEventListener('click', () => {
+                const newRole = currentUser.role === 'Buyer' ? 'Seller' : 'Buyer';
+                showConfirm(
+                    `Switch your account to <strong>${newRole}</strong>?\n\n` +
+                    (newRole === 'Seller'
+                        ? 'As a Seller, you can list properties and manage inquiries from buyers.'
+                        : 'As a Buyer, you can browse listings, save favorites, and send inquiries.'),
+                    async () => {
+                        changeRoleBtn.disabled = true;
+                        changeRoleBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Switching...';
+                        try {
+                            const db = firebase.database();
+                            await db.ref('users/' + currentUser.id + '/role').set(newRole);
+                            currentUser.role = newRole;
+                            showToast(`Role switched to ${newRole}! Reloading...`, 'success');
+                            setTimeout(() => location.reload(), 1500);
+                        } catch (e) {
+                            console.error('[Estato] Role change failed:', e);
+                            showToast('Failed to switch role. Please try again.', 'danger');
+                            changeRoleBtn.disabled = false;
+                            changeRoleBtn.innerHTML = `<i class="ph ph-shuffle"></i> Switch to ${newRole} Account`;
+                        }
+                    }
+                );
+            });
+        }
 
         if (document.getElementById('exportDataBtn')) {
             document.getElementById('exportDataBtn').addEventListener('click', () => {
@@ -1835,14 +1925,19 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Attach Deletion Listeners
         document.querySelectorAll('.delete-inq-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const inqId = e.currentTarget.getAttribute('data-id');
-                if (confirm('Are you sure you want to archive this inquiry?')) {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i>';
+                showConfirm('Archive this inquiry? This cannot be undone.', () => {
                     EstatoStorage.deleteInquiry(inqId);
                     renderMessages();
-                }
+                }, () => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="ph ph-trash"></i>';
+                });
             });
         });
     }
@@ -2333,18 +2428,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Apply Proximity Filter
         if (currentRadiusCenter) {
+            if (!updateMapMarkers._distanceCache) updateMapMarkers._distanceCache = new Map();
+            const dCache = updateMapMarkers._distanceCache;
+            const cacheKey = `${currentRadiusCenter.lat},${currentRadiusCenter.lng}`;
+
             properties = properties.filter(p => {
                 const lat = p.lat || (CITY_COORDS[p.city] ? CITY_COORDS[p.city][0] : null);
                 const lng = p.lng || (CITY_COORDS[p.city] ? CITY_COORDS[p.city][1] : null);
                 if (lat === null || lng === null) return false;
 
-                // Optimization: Cache and only recalculate if the user's search center changes
-                if (p._centerLat !== currentRadiusCenter.lat || p._centerLng !== currentRadiusCenter.lng) {
-                    p._distance = getHaversineDistance(currentRadiusCenter.lat, currentRadiusCenter.lng, lat, lng);
-                    p._centerLat = currentRadiusCenter.lat;
-                    p._centerLng = currentRadiusCenter.lng;
+                const key = `${cacheKey}:${p.id}`;
+                if (!dCache.has(key)) {
+                    dCache.set(key, getHaversineDistance(currentRadiusCenter.lat, currentRadiusCenter.lng, lat, lng));
                 }
-                return p._distance <= currentRadiusKm;
+                return dCache.get(key) <= currentRadiusKm;
             });
         }
 
@@ -2547,7 +2644,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Track View
         if (currentUser) EstatoStorage.addRecentView(currentUser.id, id);
 
-        const isAuthorizedToEdit = (currentUser.role === 'Seller' && prop.ownerId === currentUser.id) || currentUser.role === 'Admin';
+        const isAuthorizedToEdit = currentUser && ((currentUser.role === 'Seller' && prop.ownerId === currentUser.id) || currentUser.role === 'Admin');
 
         if (isAuthorizedToEdit) {
             openModal(prop);
@@ -2576,12 +2673,11 @@ document.addEventListener('DOMContentLoaded', () => {
         parent.querySelectorAll('.delete-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (confirm('Are you sure you want to delete this listing?')) {
-                    const success = await EstatoStorage.deleteProperty(e.currentTarget.getAttribute('data-id'));
-                    if (!success) {
-                        showToast('Unauthorized: You can only delete your own listings.', 'danger');
-                    }
-                }
+                const id = e.currentTarget.getAttribute('data-id');
+                showConfirm('Delete this listing? This cannot be undone.', async () => {
+                    const success = await EstatoStorage.deleteProperty(id);
+                    if (!success) showToast('Unauthorized: You can only delete your own listings.', 'danger');
+                });
             });
         });
 
@@ -2616,12 +2712,10 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
-                if (confirm('Approve this listing for public view?')) {
+                showConfirm('Approve this listing for public view?', async () => {
                     const success = await EstatoStorage.approveProperty(id);
-                    if (success) {
-                        renderView(currentView, searchInput.value);
-                    }
-                }
+                    if (success) renderView(currentView, searchInput.value);
+                });
             });
         });
 
@@ -2629,13 +2723,11 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
-                const reason = prompt('Please provide a reason for rejecting this listing (will be sent to the seller):');
-                if (reason !== null) {
+                showPrompt('Provide a reason for rejection (will be sent to the seller):', async (reason) => {
+                    if (reason === null) return;
                     const success = await EstatoStorage.rejectProperty(id, reason.trim() || undefined);
-                    if (success) {
-                        renderView(currentView, searchInput.value);
-                    }
-                }
+                    if (success) renderView(currentView, searchInput.value);
+                });
             });
         });
 
@@ -3051,12 +3143,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function handleRestore(file) {
-        if (!confirm("WARNING: This will overwrite ALL current data with the values from your backup. This action cannot be undone. \n\nAre you sure you want to proceed?")) {
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = async (e) => {
+        showConfirm('⚠️ WARNING: This will overwrite ALL current data. This action cannot be undone. Proceed?', async () => {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
             try {
                 const json = JSON.parse(e.target.result);
                 const ok = await EstatoStorage.restoreData(json);
@@ -3072,7 +3161,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         reader.onerror = () => showToast('Error reading backup file.', 'danger');
-        reader.readAsText(file);
+            reader.readAsText(file);
+        }); // end showConfirm
     }
 
     function updateSeoMetadata(prop = null) {
