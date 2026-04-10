@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const FILTER_CONFIG = {
         sortOptions: [
             { value: 'newest', label: 'Newest First' },
+            { value: 'oldest', label: 'Oldest First' },
             { value: 'price-low', label: 'Price: Low to High' },
             { value: 'price-high', label: 'Price: High to Low' }
         ],
@@ -475,15 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // V11 Compare Actions
-        document.getElementById('clearCompareBtn').addEventListener('click', () => {
-            compareList = [];
-            updateCompareTray();
-        });
-        document.getElementById('startCompareBtn').addEventListener('click', renderComparisonTable);
-        document.getElementById('closeCompareModal').addEventListener('click', () => {
-            document.getElementById('compareModal').classList.remove('active');
-        });
+        // V11 Compare Actions removed. Handled via inline generic onclick attributes in HTML.
         
         // Inquiry Listeners
         const closeInquiryBtn = document.getElementById('closeInquiryBtn');
@@ -1093,7 +1086,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderDashboard() {
         const stats = Storage.getStats();
         // Seller sees only their own, Admin sees all
-        let recentProps = Storage.getProperties();
+        const allProps = Storage.getProperties();
+        let recentProps = allProps;
         if (currentUser.role === 'Seller') {
             recentProps = recentProps.filter(p => p.ownerId === currentUser.id);
         }
@@ -1143,7 +1137,17 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
 
             ${currentUser.role === 'Admin' ? `
+                ${allProps.filter(p => p.status === 'Pending').length > 0 ? `
                 <div class="section-header" style="margin-top: 3rem;">
+                    <h3><i class="ph-duotone ph-clock"></i> Pending Approvals</h3>
+                </div>
+                <div class="recent-scroll-container" style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1.5rem; margin-bottom: 2rem;">
+                    ${allProps.filter(p => p.status === 'Pending').map((p, i) => `<div style="min-width: 300px;">${generatePropertyCard(p, i)}</div>`).join('')}
+                </div>
+                <div class="card-separator"></div>
+                ` : ''}
+
+                <div class="section-header" style="margin-top: 2rem;">
                     <h3>Developer & Admin Tools</h3>
                 </div>
                 <div class="surface-panel" style="padding: 1.5rem; display: flex; align-items: center; justify-content: space-between; border: 1px dashed var(--border-color); background: var(--bg-hover); margin-bottom: 1rem;">
@@ -1412,12 +1416,19 @@ document.addEventListener('DOMContentLoaded', () => {
             properties.sort((a, b) => a.price - b.price);
         } else if (currentSort === 'price-high') {
             properties.sort((a, b) => b.price - a.price);
-        } else {
-            // Newest first - Explicity sort by numeric part of the ID (timestamp)
+        } else if (currentSort === 'oldest') {
+            // Oldest first - Sort by numeric part of ID ascending
             properties.sort((a, b) => {
                 const idA = a.id ? a.id.replace('prop_', '') : '0';
                 const idB = b.id ? b.id.replace('prop_', '') : '0';
-                return idB.localeCompare(idA);
+                return idA.localeCompare(idB); // Ascending
+            });
+        } else {
+            // Newest first (default) - Sort by numeric part of ID descending
+            properties.sort((a, b) => {
+                const idA = a.id ? a.id.replace('prop_', '') : '0';
+                const idB = b.id ? b.id.replace('prop_', '') : '0';
+                return idB.localeCompare(idA); // Descending
             });
         }
 
@@ -1859,9 +1870,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     ${ratingHTML}
                     ${(role === 'Admin' && prop.status === 'Pending') ? `
-                        <button class="approve-float-btn approve-btn shadow-hover" data-id="${prop.id}" title="Approve Listing" style="position: absolute; top: 1rem; left: 1rem; z-index: 10; background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 20px; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; box-shadow: var(--shadow-lg);">
-                            <i class="ph-fill ph-check-circle"></i> APPROVE
-                        </button>
+                        <div style="position: absolute; top: 1rem; left: 1rem; z-index: 10; display: flex; flex-direction: column; gap: 0.25rem;">
+                            <button class="approve-btn shadow-hover" data-id="${prop.id}" title="Approve Listing" style="background: var(--success); color: white; border: none; padding: 0.35rem 0.75rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; box-shadow: var(--shadow-md);">
+                                <i class="ph-fill ph-check-circle"></i> APPROVE
+                            </button>
+                            <button class="reject-btn shadow-hover" data-id="${prop.id}" title="Reject Listing" style="background: var(--danger); color: white; border: none; padding: 0.35rem 0.75rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.75rem; display: flex; align-items: center; gap: 0.25rem; box-shadow: var(--shadow-md);">
+                                <i class="ph-fill ph-x-circle"></i> REJECT
+                            </button>
+                        </div>
                     ` : ''}
                     <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" onclick="window.toggleCompare('${prop.id}', event)" title="Compare Property" style="right: 3.5rem;">
                         <i class="ph ph-scales"></i>
@@ -2455,6 +2471,11 @@ document.addEventListener('DOMContentLoaded', () => {
         html += `</tbody></table></div>`;
         container.innerHTML = html;
         modal.classList.add('active');
+        
+        // Auto-clear background selection UI UX
+        if (window.clearCompare) {
+            window.clearCompare();
+        }
     }
 
     // Expose to global for HTML string events
@@ -2538,6 +2559,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 const id = e.currentTarget.getAttribute('data-id');
                 if (confirm('Approve this listing for public view?')) {
                     const success = await Storage.approveProperty(id);
+                    if (success) {
+                        renderView(currentView, searchInput.value);
+                    }
+                }
+            });
+        });
+
+        parent.querySelectorAll('.reject-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.getAttribute('data-id');
+                const reason = prompt('Please provide a reason for rejecting this listing (will be sent to the seller):');
+                if (reason !== null) {
+                    const success = await Storage.rejectProperty(id, reason.trim() || undefined);
                     if (success) {
                         renderView(currentView, searchInput.value);
                     }

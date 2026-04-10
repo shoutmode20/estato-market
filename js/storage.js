@@ -372,6 +372,24 @@ const Storage = {
         }
     },
 
+    async sendUserNotification(userId, message, type = 'info', meta = {}) {
+        try {
+            const snapshot = await db.ref('notifications/' + userId).get();
+            let items = snapshot.val()?.items || [];
+            items.unshift({
+                id: 'notif_' + Date.now(),
+                message,
+                type,
+                meta,
+                timestamp: new Date().toISOString(),
+                read: false
+            });
+            await db.ref('notifications/' + userId).set({ items });
+        } catch(e) {
+            console.error("Failed to send remote notification", e);
+        }
+    },
+
     async approveProperty(id) {
         if (_syncCallback) _syncCallback('syncing');
         if (_memCache.currentUser.role !== 'Admin') return false;
@@ -384,7 +402,8 @@ const Storage = {
         try {
             await db.ref('properties/' + id).update({ status: 'Available' });
             this.logActivity('APPROVE_PROPERTY', `Admin approved listing: ${_memCache.properties[index].title}`);
-            this.addNotification(`Listing Approved: ${_memCache.properties[index].title}`, 'new_listing', { id: id });
+            // Force notification to the Seller (Owner)
+            await this.sendUserNotification(_memCache.properties[index].ownerId, `Listing Approved: ${_memCache.properties[index].title}`, 'success', { id: id });
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch(e) {
@@ -393,6 +412,31 @@ const Storage = {
             return false;
         }
     },
+
+    async rejectProperty(id, reason = 'Did not meet marketplace guidelines.') {
+        if (_syncCallback) _syncCallback('syncing');
+        if (_memCache.currentUser.role !== 'Admin') return false;
+
+        const index = _memCache.properties.findIndex(p => p.id === id);
+        if (index === -1) return false;
+
+        _memCache.properties[index].status = 'Rejected';
+
+        try {
+            await db.ref('properties/' + id).update({ status: 'Rejected' });
+            this.logActivity('REJECT_PROPERTY', `Admin rejected listing: ${_memCache.properties[index].title}`);
+            // Force notification to the Seller (Owner)
+            await this.sendUserNotification(_memCache.properties[index].ownerId, `Your listing "${_memCache.properties[index].title}" was rejected. Reason: ${reason}`, 'warning', { id: id });
+            
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch(e) {
+            console.error(e);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
 
     // ── Favorites ──
     getFavorites() { return _memCache.favorites; },
@@ -664,15 +708,14 @@ const Storage = {
 
             // STEP 2: Metadata Update (PATCH)
             // Now that the file exists, we set its name and ensure it's in the root
-            const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,webViewLink,webContentLink`, {
+            const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?addParents=root&fields=id,webViewLink,webContentLink`, {
                 method: 'PATCH',
                 headers: {
                     'Authorization': 'Bearer ' + _driveAccessToken,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    name: file.name || 'estato_property_image.jpg',
-                    addParents: 'root'
+                    name: file.name || 'estato_property_image.jpg'
                 })
             });
 

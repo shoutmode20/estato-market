@@ -1,4 +1,4 @@
-const CACHE_NAME = 'estato-v12.5';
+const CACHE_NAME = 'estato-v12.6';
 const ASSETS = [
     './',
     './index.html',
@@ -24,8 +24,8 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
     
     // STRICT BYPASS: Only cache GET requests from our own origin
-    // This ensures POST uploads and external APIs (Google Drive) are never intercepted by the cache logic
-    if (event.request.method !== 'GET' || url.origin.includes('googleapis.com')) {
+    // This ensures POST uploads and ALL external APIs (Google Drive, Nominatim Location Search, Unsplash) go through Network
+    if (event.request.method !== 'GET' || url.origin !== location.origin) {
         return; 
     }
 

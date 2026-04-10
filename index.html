@@ -16,10 +16,8 @@
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- PDF Generation libs -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+    <!-- PDF Generation libs removed from head (already declared at bottom with defer/async if needed) -->
     <!-- PWA Config -->
     <link rel="manifest" href="./manifest.json">
     
@@ -27,7 +25,7 @@
     <!-- Styles -->
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
     <link rel="stylesheet" href="./css/styles.css?v=12.1">
 </head>
 <body>
@@ -171,33 +169,7 @@
             <!-- Main Views Container — properties grid/map are injected here by renderProperties() -->
             <div id="viewContainer" class="view-content"></div>
 
-            <!-- Comparison Tray V11 -->
-            <div id="compareTray" class="compare-tray hidden">
-                <div class="tray-content">
-                    <div class="tray-label">
-                        <i class="ph-duotone ph-equals"></i>
-                        <span>Compare Properties (<span id="compareCount">0</span>)</span>
-                    </div>
-                    <div id="compareListTray" class="compare-list-pills"></div>
-                    <div class="tray-actions">
-                        <button class="btn btn-primary" id="startCompareBtn">Compare Now</button>
-                        <button class="btn btn-icon" id="clearCompareBtn" title="Clear All"><i class="ph ph-trash"></i></button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Comparison Modal V11 -->
-            <div id="compareModal" class="modal-overlay">
-                <div class="modal comparison-modal" style="max-width: 950px; background: white;">
-                    <div class="modal-header">
-                        <h3>Side-by-Side Comparison</h3>
-                        <button class="close-btn" id="closeCompareModal">&times;</button>
-                    </div>
-                    <div class="modal-body" id="comparisonTableContainer" style="overflow-x: auto; padding: 0;">
-                        <!-- JS generated table -->
-                    </div>
-                </div>
-            </div>
+            <!-- Comparison UI moved to bottom of body for better z-indexing -->
             
             <!-- Mobile Specific Floating Action Button (Owners only) -->
             <button class="mobile-fab admin-only" id="mobileAddBtn">
