@@ -1,0 +1,51 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid",
+        ".validate": "newData.hasChildren(['id', 'name', 'email', 'role'])",
+        "role": {
+          ".validate": "newData.val() === 'Buyer' || newData.val() === 'Seller' || (auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin')"
+        }
+      }
+    },
+    "properties": {
+      ".read": "auth != null",
+      "$propId": {
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin')))",
+        ".validate": "newData.hasChildren(['title', 'price', 'city', 'ownerId'])"
+      }
+    },
+    "favorites": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid"
+      }
+    },
+    "inquiries": {
+      "$inqId": {
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)",
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('buyerId').val() === auth.uid) || (data.exists() && (data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)))",
+        ".validate": "newData.hasChildren(['propertyId', 'buyerId', 'ownerId', 'message'])"
+      }
+    },
+    "notifications": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null"
+      }
+    },
+    "activities": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin'",
+      ".write": "auth != null"
+    },
+    "reviews": {
+      ".read": "auth != null",
+      "$revId": {
+        ".write": "auth != null && (!data.exists() && newData.child('userId').val() === auth.uid)",
+        ".validate": "newData.hasChildren(['propertyId', 'userId', 'rating', 'comment'])"
+      }
+    }
+  }
+}

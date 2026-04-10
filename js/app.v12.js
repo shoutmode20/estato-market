@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentUser = null;
     let currentView = 'properties'; // Default fallback
     let currentFilterCity = null;
+    let storageSubscribed = false;   // Guard: prevent duplicate EstatoStorage.subscribe() calls across re-auths
 
     let currentSort = 'newest';
     let currentTypeFilter = '';
@@ -15,10 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // V11 States
     let map = null;
+    let mapLayerGroup = null;
     let markers = [];
     let isMapVisible = false;
     let compareList = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]')
-                        .map(id => Storage.getPropertyById(id))
+                        .map(id => EstatoStorage.getPropertyById(id))
                         .filter(p => p); 
     let modalMap = null;
     let modalMarker = null;
@@ -35,6 +37,46 @@ document.addEventListener('DOMContentLoaded', () => {
             timeout = setTimeout(() => func.apply(this, args), wait);
         };
     }
+
+    /** Sanitize any user-generated string before injecting into innerHTML to prevent Stored XSS */
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * Non-blocking toast notification system.
+     * Replaces all blocking alert() calls throughout the app.
+     * @param {string} message - Text to display
+     * @param {'info'|'success'|'danger'|'warning'} type - Visual style
+     * @param {number} duration - Auto-dismiss delay in ms
+     */
+    function showToast(message, type = 'info', duration = 4500) {
+        let container = document.getElementById('toastContainer');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toastContainer';
+            Object.assign(container.style, {
+                position: 'fixed', bottom: '1.5rem', right: '1.5rem',
+                zIndex: '99999', display: 'flex', flexDirection: 'column',
+                gap: '0.5rem', maxWidth: '400px', pointerEvents: 'none'
+            });
+            document.body.appendChild(container);
+        }
+        const iconMap = { success: 'ph-check-circle', danger: 'ph-warning-circle', info: 'ph-info', warning: 'ph-warning' };
+        const colorMap = { success: 'var(--success)', danger: 'var(--danger)', info: 'var(--primary)', warning: '#d97706' };
+        const toast = document.createElement('div');
+        toast.style.cssText = `background:var(--bg-surface);border:1px solid var(--border-color);border-left:4px solid ${colorMap[type]||colorMap.info};padding:1rem 1.25rem;border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);display:flex;align-items:flex-start;gap:0.75rem;pointer-events:all;animation:slideUpFade 0.3s ease-out;`;
+        toast.innerHTML = `<i class="ph-fill ${iconMap[type]||iconMap.info}" style="color:${colorMap[type]||colorMap.info};font-size:1.2rem;flex-shrink:0;margin-top:1px;"></i><span style="font-size:0.88rem;color:var(--text-main);flex:1;line-height:1.5;">${escapeHtml(message)}</span><i class="ph ph-x" style="cursor:pointer;color:var(--text-muted);font-size:0.9rem;flex-shrink:0;" onclick="this.closest('div').remove()"></i>`;
+        container.appendChild(toast);
+        setTimeout(() => { if (toast.parentElement) toast.remove(); }, duration);
+    }
+
     // Property Category Static Metadata
     const PROPERTY_METADATA = {
         'Apartment': { icon: 'ph-buildings', tags: ['High-rise', 'Security', 'Amenities'], avgPriceRange: '₹50L - ₹5Cr', color: 'blue' },
@@ -190,7 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('online', async () => {
         console.log('[Estato] Back online — flushing pending sync...');
         updateSyncBadge('syncing');
-        await Storage._flushPendingSync();
+        await EstatoStorage._flushPendingSync();
         updateSyncBadge('synced');
     });
 
@@ -203,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.addEventListener('message', async (event) => {
             if (event.data && event.data.type === 'SYNC_NOW') {
-                await Storage._flushPendingSync();
+                await EstatoStorage._flushPendingSync();
                 updateSyncBadge('synced');
             }
         });
@@ -264,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 1. Initialize GIS & Drive Engine
         try {
-            await Storage.initDrive(updateSyncBadge);
+            await EstatoStorage.initDrive(updateSyncBadge);
             console.log("Drive Engine Initialized.");
         } catch (err) {
             console.error("Drive Engine Init Failed:", err);
@@ -273,7 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. Try silent/cached login to bypass screen if already connected in this session
         try {
-            const ok = await Storage.loginWithGoogle(null, true); // silent = true
+            const ok = await EstatoStorage.loginWithGoogle(null, true); // silent = true
             if (ok) {
                 checkAuth();
                 return;
@@ -286,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- AUTHENTICATION ENGINE ---
     function checkAuth() {
-        currentUser = Storage.getCurrentUser();
+        currentUser = EstatoStorage.getCurrentUser();
         if (currentUser) {
             loginScreen.classList.add('hidden');
             loadingOverlay.classList.add('hidden');
@@ -305,13 +347,18 @@ document.addEventListener('DOMContentLoaded', () => {
             renderNotifications();
             populateCitiesDatalist();
 
-            // Real-time UI Sync: Automatically re-render current view when storage data changes
-            Storage.subscribe(() => {
-                console.log("[Estato] Data changed, refreshing current view:", currentView);
-                renderView(currentView, searchInput.value);
-                renderNotifications();
-                updateSeoMetadata();
-            });
+            // Real-time UI Sync — guard ensures we subscribe only once per session
+            // even if checkAuth() is called again (e.g. after Drive re-auth).
+            // The debounce collapses rapid simultaneous DB events into one render pass.
+            if (!storageSubscribed) {
+                storageSubscribed = true;
+                const _debouncedRender = debounce(() => {
+                    renderView(currentView, searchInput.value);
+                    renderNotifications();
+                    updateSeoMetadata();
+                }, 150);
+                EstatoStorage.subscribe(_debouncedRender);
+            }
         } else {
             loginScreen.classList.remove('hidden');
             appContainer.classList.add('hidden');
@@ -339,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 try {
                     const role = selectedRoleInput.value;
-                    const success = await Storage.loginWithGoogle(role, false);
+                    const success = await EstatoStorage.loginWithGoogle(role, false);
 
                     if (success) {
                         loadingOverlay.classList.remove('hidden');
@@ -392,7 +439,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (scrollTop + clientHeight >= scrollHeight - 300) {
                     isPaging = true;
                     console.log("[Estato] Bottom reached, loading more...");
-                    const loaded = await Storage.loadMoreProperties();
+                    const loaded = await EstatoStorage.loadMoreProperties();
                     if (loaded) {
                         console.log("[Estato] Page loaded successfully");
                     }
@@ -457,7 +504,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.stopPropagation();
                 notifDropdown.classList.toggle('hidden');
                 if (!notifDropdown.classList.contains('hidden')) {
-                    Storage.markNotificationsRead();
+                    EstatoStorage.markNotificationsRead();
                 }
             });
         }
@@ -465,7 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (markReadBtn) {
             markReadBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                Storage.markNotificationsRead();
+                EstatoStorage.markNotificationsRead();
             });
         }
 
@@ -494,12 +541,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.preventDefault();
                 const msg = document.getElementById('replyMessage').value.trim();
                 if (!msg) {
-                    alert('Please write a message before sending.');
+                    showToast('Please write a message before sending.', 'warning');
                     return;
                 }
                 const inqId = document.getElementById('replyInqId').value;
                 
-                await Storage.addInquiryReply(inqId, {
+                await EstatoStorage.addInquiryReply(inqId, {
                     senderId: currentUser.id,
                     senderName: currentUser.name,
                     senderRole: currentUser.role,
@@ -514,41 +561,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if(closeInquiryBtn) closeInquiryBtn.addEventListener('click', () => inquiryModal.classList.remove('active'));
         if(inquiryForm) {
-            inquiryForm.addEventListener('submit', (e) => {
+            inquiryForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const msg = document.getElementById('inqMessage').value.trim();
                 if (!msg) {
-                    alert('Please write a message before sending.');
+                    showToast('Please write a message before sending.', 'warning');
                     return;
                 }
-                Storage.addInquiry({
-                    propertyId: document.getElementById('inqPropertyId').value,
-                    propertyTitle: document.getElementById('inqPropertyTitle').value,
-                    ownerId: document.getElementById('inqOwnerId').value,
-                    buyerId: currentUser.id,
-                    buyerName: currentUser.name,
-                    buyerEmail: currentUser.email,
-                    buyerPhone: '',
-                    message: msg,
-                    status: 'Unread'
-                });
+                const submitBtn = inquiryForm.querySelector('[type="submit"]');
+                const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+                if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Sending...'; }
 
-                // Show Success State
-                const modalBody = inquiryModal.querySelector('.modal-body');
-                const originalContent = modalBody.innerHTML;
-                modalBody.innerHTML = `
-                    <div style="text-align: center; padding: 2rem 1rem;">
-                        <div style="font-size: 3rem; color: var(--success); margin-bottom: 1rem;"><i class="ph-fill ph-check-circle"></i></div>
-                        <h3 style="margin-bottom: 0.5rem;">Message Sent!</h3>
-                        <p style="color: var(--text-muted);">The seller has been notified and will get back to you soon.</p>
-                    </div>
-                `;
-                
-                setTimeout(() => {
-                    inquiryModal.classList.remove('active');
-                    renderNotifications(); // If seller is current user (for demo)
-                    setTimeout(() => { modalBody.innerHTML = originalContent; }, 300);
-                }, 2000);
+                try {
+                    await EstatoStorage.addInquiry({
+                        propertyId: document.getElementById('inqPropertyId').value,
+                        propertyTitle: document.getElementById('inqPropertyTitle').value,
+                        ownerId: document.getElementById('inqOwnerId').value,
+                        buyerId: currentUser.id,
+                        buyerName: currentUser.name,
+                        buyerEmail: currentUser.email,
+                        buyerPhone: '',
+                        message: msg,
+                        status: 'Unread'
+                    });
+
+                    // Show inline success state
+                    const modalBody = inquiryModal.querySelector('.modal-body');
+                    const originalContent = modalBody.innerHTML;
+                    modalBody.innerHTML = `
+                        <div style="text-align: center; padding: 2rem 1rem;">
+                            <div style="font-size: 3rem; color: var(--success); margin-bottom: 1rem;"><i class="ph-fill ph-check-circle"></i></div>
+                            <h3 style="margin-bottom: 0.5rem;">Message Sent!</h3>
+                            <p style="color: var(--text-muted);">The seller has been notified and will reply soon.</p>
+                        </div>
+                    `;
+                    setTimeout(() => {
+                        inquiryModal.classList.remove('active');
+                        renderNotifications();
+                        setTimeout(() => { modalBody.innerHTML = originalContent; }, 300);
+                    }, 2000);
+                } catch(err) {
+                    // Handles rate-limit error from EstatoStorage.addInquiry()
+                    showToast(err.message, 'warning', 6000);
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHtml; }
+                }
             });
         }
 
@@ -588,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const rating = revRating.value;
                 const comment = document.getElementById('revComment').value;
 
-                Storage.addReview(propId, rating, comment);
+                EstatoStorage.addReview(propId, rating, comment);
                 
                 // Refresh Modal
                 renderReviews(propId);
@@ -606,7 +662,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (closePriceBtn) closePriceBtn.onclick = () => priceModal.classList.remove('active');
 
         window.openPriceHistoryModal = (id) => {
-            const prop = Storage.getPropertyById(id);
+            const prop = EstatoStorage.getPropertyById(id);
             if (!prop) return;
 
             document.getElementById('priceModalTitle').textContent = prop.title;
@@ -704,7 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 try {
                     for(let file of files) {
-                        const link = await Storage.uploadImageToDrive(file);
+                        const link = await EstatoStorage.uploadImageToDrive(file);
                         linksArray.push(link);
                     }
                     
@@ -984,7 +1040,7 @@ document.addEventListener('DOMContentLoaded', () => {
         dashboardCharts = [];
 
         // RBAC View Security Check
-        if(currentUser.role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities')) {
+        if(currentUser && currentUser.role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities')) {
             renderProperties(); // Fallback secure redirect
             return;
         }
@@ -1070,13 +1126,13 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             for (let i = 0; i < count; i++) {
                 const prop = generateDummyProperty();
-                await Storage.addProperty(prop);
+                await EstatoStorage.addProperty(prop);
             }
-            alert(`Successfully seeded ${count} realistic property listings!`);
+            showToast(`Successfully seeded ${count} listings!`, 'success');
             renderView('dashboard'); // Refresh stats
         } catch (err) {
             console.error("Seeding failed:", err);
-            alert("Error seeding data. Check console for details.");
+            showToast('Seeding failed. Check console for details.', 'danger');
         } finally {
             seedBtn.innerHTML = originalHtml;
             seedBtn.disabled = false;
@@ -1085,9 +1141,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Views ---
     function renderDashboard() {
-        const stats = Storage.getStats();
+        const stats = EstatoStorage.getStats();
         // Seller sees only their own, Admin sees all
-        const allProps = Storage.getProperties();
+        const allProps = EstatoStorage.getProperties();
         let recentProps = allProps;
         if (currentUser.role === 'Seller') {
             recentProps = recentProps.filter(p => p.ownerId === currentUser.id);
@@ -1211,7 +1267,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Initialize Charts
         const cityLabels = Object.keys(stats.avgPriceByCity);
         const cityCounts = cityLabels.map(city => {
-            const props = Storage.getProperties().filter(p => p.city === city);
+            const props = EstatoStorage.getProperties().filter(p => p.city === city);
             return (currentUser.role === 'Seller') ? props.filter(p => p.ownerId === currentUser.id).length : props.length;
         });
 
@@ -1312,8 +1368,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderCities() {
-        const properties = Storage.getProperties();
-        const cities = Storage.getCities();
+        const properties = EstatoStorage.getProperties();
+        const cities = EstatoStorage.getCities();
         
         let html = `<div class="section-header"><h2>Service Regions</h2></div><div class="grid-layout">`;
 
@@ -1352,8 +1408,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderSavedProperties() {
-        let properties = Storage.getProperties();
-        const favs = Storage.getFavorites();
+        let properties = EstatoStorage.getProperties();
+        const favs = EstatoStorage.getFavorites();
         properties = properties.filter(p => favs.includes(p.id));
 
         let html = `<div class="section-header"><h2>Saved Properties</h2></div><div class="grid-layout">`;
@@ -1370,7 +1426,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderProperties(cityFilter = null, searchQuery = '') {
-        let properties = Storage.getProperties();
+        let properties = EstatoStorage.getProperties();
 
         // RBAC Filtering (Fraud Prevention Sandbox)
         if (currentUser.role === 'Buyer') {
@@ -1522,7 +1578,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const sourceProp = properties[0];
             // Only show recommendations if the search query matches the property ID exactly (Detail View)
             if (searchQuery.toLowerCase() === sourceProp.id.toLowerCase()) {
-                const similarProps = getSimilarProperties(sourceProp.id);
+                const similarProps = getSimilarProperties(sourceProp); // Pass object, not ID string
                 if (similarProps.length > 0) {
                     const recSection = document.createElement('div');
                     recSection.className = 'recommendations-section';
@@ -1598,11 +1654,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         currentRadiusCenter = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                         renderView('properties', searchInput.value);
                     }, (err) => {
-                        alert("Geolocation failed or denied. Try entering coordinates or city name manually.");
+                        showToast('Location access denied. Enter a city or coordinates manually.', 'warning');
                         renderView('properties', searchInput.value);
                     });
                 } else {
-                    alert("Geolocation is not supported by your browser.");
+                    showToast('Geolocation is not supported by your browser.', 'warning');
                 }
             });
         }
@@ -1624,7 +1680,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         currentRadiusCenter = coords;
                         renderView('properties', searchInput.value);
                     } else {
-                        alert("Location not found. Use a major city like 'Mumbai' or entering coordinates like '19.07,72.87'");
+                        showToast("Location not found. Try a city name like 'Mumbai' or coordinates like '19.07,72.87'", 'warning');
                     }
                 }
             });
@@ -1684,13 +1740,13 @@ document.addEventListener('DOMContentLoaded', () => {
         viewContainer.innerHTML = html;
 
         document.getElementById('logoutBtn').addEventListener('click', () => {
-             Storage.logout();
+             EstatoStorage.logout();
              location.reload(); // Hard reload to clear session
         });
 
         if (document.getElementById('exportDataBtn')) {
             document.getElementById('exportDataBtn').addEventListener('click', () => {
-                const dataStr = JSON.stringify(Storage.getData(), null, 2);
+                const dataStr = JSON.stringify(EstatoStorage.getData(), null, 2);
                 const dataBlob = new Blob([dataStr], { type: 'application/json' });
                 const url = URL.createObjectURL(dataBlob);
                 const a = document.createElement('a');
@@ -1703,14 +1759,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderMessages() {
-        let inquiries = Storage.getInquiries();
+        let inquiries = EstatoStorage.getInquiries();
         
         // Admin sees all, Seller sees own
         if (currentUser.role === 'Seller') {
             inquiries = inquiries.filter(inq => inq.ownerId === currentUser.id);
         }
         
-        inquiries = inquiries.reverse();
+        inquiries = [...inquiries].reverse(); // Shallow copy to avoid mutating the live _memCache array
         
         let headerText = currentUser.role === 'Buyer' ? 'My Inquiries' : 'Inbound Leads';
         let html = `<div class="section-header"><h2>${headerText}</h2></div>`;
@@ -1729,8 +1785,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div style="display: flex; gap: 0.75rem; flex-direction: ${isMe ? 'row-reverse' : 'row'}; align-items: flex-end;">
                                 <div class="avatar" style="width: 30px; height: 30px; min-width: 30px; background: var(--border-color); display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.8rem; font-weight: bold; color: var(--text-main);">${reply.senderName.charAt(0)}</div>
                                 <div style="background: ${isMe ? 'var(--primary-light)' : 'var(--bg-main)'}; color: ${isMe ? 'var(--primary)' : 'var(--text-main)'}; padding: 0.75rem 1rem; border-radius: 1rem; border-bottom-${isMe ? 'right' : 'left'}-radius: 0; font-size: 0.9rem; border: 1px solid ${isMe ? 'rgba(234, 88, 12, 0.2)' : 'var(--border-color)'}; max-width: 80%;">
-                                    <div style="font-weight: bold; font-size: 0.75rem; margin-bottom: 0.25rem;">${reply.senderName} <span style="font-weight: normal; color: var(--text-muted); margin-left: 0.5rem;">${new Date(reply.date).toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'short'})}</span></div>
-                                    ${reply.message}
+                                    <div style="font-weight: bold; font-size: 0.75rem; margin-bottom: 0.25rem;">${escapeHtml(reply.senderName)} <span style="font-weight: normal; color: var(--text-muted); margin-left: 0.5rem;">${new Date(reply.date).toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'short'})}</span></div>
+                                    ${escapeHtml(reply.message)}
                                 </div>
                             </div>
                         `;
@@ -1744,12 +1800,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="message-buyer">
                             <div class="avatar" style="background: var(--primary-light); color: var(--primary); width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700;">${inq.buyerName.charAt(0)}</div>
                             <div>
-                                <h4 style="margin: 0; font-size: 1.1rem;">${inq.buyerName}</h4>
-                                <p style="margin: 2px 0 0 0; font-size: 0.85rem; color: var(--text-muted);">${inq.buyerEmail}</p>
+                                <h4 style="margin: 0; font-size: 1.1rem;">${escapeHtml(inq.buyerName)}</h4>
+                                <p style="margin: 2px 0 0 0; font-size: 0.85rem; color: var(--text-muted);">${escapeHtml(inq.buyerEmail)}</p>
                             </div>
                         </div>
                         <div style="display: flex; gap: 0.75rem; align-items: center;">
-                            <div class="message-property"><i class="ph-duotone ph-buildings"></i> ${inq.propertyTitle}</div>
+                            <div class="message-property"><i class="ph-duotone ph-buildings"></i> ${escapeHtml(inq.propertyTitle)}</div>
                             <button class="btn btn-icon shadow-hover open-reply-btn" data-id="${inq.id}" title="Reply in Chat" style="background: var(--primary-light); color: var(--primary); display: inline-flex; align-items: center; justify-content: center;">
                                 <i class="ph ph-chat-text"></i>
                             </button>
@@ -1759,7 +1815,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                     </div>
                     <div class="message-body" style="background: var(--bg-hover); padding: 1.25rem; border-radius: var(--radius-sm); margin: 1rem 0; border-left: 4px solid var(--primary); font-style: italic; color: var(--text-main);">
-                        "${inq.message}"
+                        "${escapeHtml(inq.message)}"
                     </div>
                     ${repliesHtml}
                     <div style="text-align: right; font-size: 0.8rem; color: var(--text-muted); font-weight: 500; margin-top: 1rem;">
@@ -1784,7 +1840,7 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 const inqId = e.currentTarget.getAttribute('data-id');
                 if (confirm('Are you sure you want to archive this inquiry?')) {
-                    Storage.deleteInquiry(inqId);
+                    EstatoStorage.deleteInquiry(inqId);
                     renderMessages();
                 }
             });
@@ -1793,7 +1849,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     window.openReviewModal = (id) => {
-        const prop = Storage.getPropertyById(id);
+        const prop = EstatoStorage.getPropertyById(id);
         if (!prop) return;
         document.getElementById('revPropertyId').value = id;
         renderReviews(id);
@@ -1802,7 +1858,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderReviews(id) {
         const container = document.getElementById('reviewList');
-        const reviews = Storage.getReviewsByProperty(id);
+        const reviews = EstatoStorage.getReviewsByProperty(id);
         
         if (reviews.length === 0) {
             container.innerHTML = `<div class="empty-state" style="padding: 2rem;"><p>No reviews yet. Be the first to share your thoughts!</p></div>`;
@@ -1815,7 +1871,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div class="avatar" style="width: 35px; height: 35px; font-size: 0.8rem;">${rev.userName.charAt(0)}</div>
                         <div>
-                            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-main);">${rev.userName}</div>
+                            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-main);">${escapeHtml(rev.userName)}</div>
                             <div style="font-size: 0.8rem; color: var(--text-muted);">${new Date(rev.date).toLocaleDateString()}</div>
                         </div>
                     </div>
@@ -1823,7 +1879,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${Array(5).fill(0).map((_, i) => `<i class="${i < rev.rating ? 'ph-fill' : 'ph'} ph-star"></i>`).join('')}
                     </div>
                 </div>
-                <p style="margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--text-main);">${rev.comment}</p>
+                <p style="margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--text-main);">${escapeHtml(rev.comment)}</p>
             </div>
         `).join('');
     }
@@ -1833,7 +1889,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isSale = prop.type === 'Sale';
         const badgeClass = isSale ? 'sale' : 'rent';
         
-        const favs = Storage.getFavorites();
+        const favs = EstatoStorage.getFavorites();
         const isFav = favs.includes(prop.id);
         const mapHref = `https://maps.google.com/?q=${encodeURIComponent(prop.address + ', ' + prop.city)}`;
         
@@ -1855,7 +1911,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ` : ''}
         `;
 
-        const ratingData = Storage.getAverageRating(prop.id);
+        const ratingData = EstatoStorage.getAverageRating(prop.id);
         const ratingHTML = ratingData.count > 0 ? `
             <div class="rating-badge" title="${ratingData.average} average based on ${ratingData.count} reviews">
                 <i class="ph-fill ph-star" style="color: #fbbf24;"></i>
@@ -1893,9 +1949,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="metric"><i class="ph-duotone ph-ruler"></i> ${prop.area ? prop.area.toLocaleString('en-IN') : '--'} sq.ft</div>
                     </div>
 
-                    <div class="card-title">${prop.title}</div>
-                    ${prop.projectName ? `<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 0.25rem;"><i class="ph ph-buildings"></i> ${prop.projectName}</div>` : ''}
-                    <div class="card-location"><i class="ph ph-map-pin"></i> ${prop.address}, ${prop.city}</div>
+                    <div class="card-title">${escapeHtml(prop.title)}</div>
+                    ${prop.projectName ? `<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 0.25rem;"><i class="ph ph-buildings"></i> ${escapeHtml(prop.projectName)}</div>` : ''}
+                    <div class="card-location"><i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}</div>
                     
                     <div class="card-separator"></div>
                     
@@ -1915,7 +1971,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ` : `
                             <button class="btn btn-secondary shadow-hover trend-btn" data-id="${prop.id}" title="Price History"><i class="ph ph-chart-line"></i></button>
                             <button class="btn btn-secondary shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews"><i class="ph ph-chat-centered-text"></i></button>
-                            <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${prop.title}" style="flex: 1.2;" title="Message Seller Securely"><i class="ph ph-envelope-simple"></i> Contact</button>
+                            <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${escapeHtml(prop.title)}" style="flex: 1.2;" title="Message Seller Securely"><i class="ph ph-envelope-simple"></i> Contact</button>
                         `}
                     </div>
                 </div>
@@ -1925,11 +1981,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderRecentlyViewed() {
         if (!currentUser) return '';
-        const recentIds = Storage.getRecentViews(currentUser.id);
+        const recentIds = EstatoStorage.getRecentViews(currentUser.id);
         if (recentIds.length === 0) return '';
 
         const properties = recentIds
-            .map(id => Storage.getPropertyById(id))
+            .map(id => EstatoStorage.getPropertyById(id))
             .filter(p => p); // Remove nulls if a property was deleted
 
         if (properties.length === 0) return '';
@@ -1958,7 +2014,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getSimilarProperties(property) {
-        const all = Storage.getProperties().filter(p => p.id !== property.id);
+        const all = EstatoStorage.getProperties().filter(p => p.id !== property.id);
         
         const scored = all.map(p => {
             let score = 0;
@@ -2250,11 +2306,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateMapMarkers() {
         if (!map) return;
         
-        // Clear existing
-        markers.forEach(m => map.removeLayer(m));
+        // Clear existing layer group instead of individual markers for performance
+        if (mapLayerGroup) {
+            map.removeLayer(mapLayerGroup);
+        }
+        mapLayerGroup = L.layerGroup().addTo(map);
         markers = [];
  
-        let properties = Storage.getProperties();
+        let properties = EstatoStorage.getProperties();
         
         // RBAC Filtering (Fraud Prevention Sandbox)
         if (currentUser.role === 'Buyer') {
@@ -2305,7 +2364,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 iconAnchor: [30, 30]
             });
  
-            const marker = L.marker([lat, lng], { icon }).addTo(map);
+            const marker = L.marker([lat, lng], { icon });
             const firstImg = (p.images && p.images.length > 0) ? p.images[0] : (p.image || '');
             const popupContent = `
                 <div style="width: 200px; font-family: 'Outfit';">
@@ -2316,6 +2375,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
             marker.bindPopup(popupContent);
+            marker.addTo(mapLayerGroup);
             markers.push(marker);
             bounds.push([lat, lng]);
         });
@@ -2331,7 +2391,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 weight: 2,
                 fillColor: '#ea580c',
                 fillOpacity: 0.2
-            }).addTo(map);
+            }).addTo(mapLayerGroup);
                 markers.push(centerMarker);
         } else if (bounds.length > 0 && !currentFilterCity) {
             map.fitBounds(bounds, { padding: [50, 50] });
@@ -2344,14 +2404,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function toggleCompare(id, event) {
         if (event) event.stopPropagation();
         
-        const prop = Storage.getPropertyById(id);
+        const prop = EstatoStorage.getPropertyById(id);
         if (!prop) return;
 
         const index = compareList.findIndex(p => p.id === id);
 
         if (index === -1) {
             if (compareList.length >= 3) {
-                alert("You can compare a maximum of 3 properties side-by-side.");
+                showToast("You can compare a maximum of 3 properties side-by-side.", "warning");
                 return;
             }
             compareList.push(prop);
@@ -2404,7 +2464,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderComparisonTable() {
         if (compareList.length < 2) {
-            alert("Please select at least 2 properties to compare.");
+            showToast("Please select at least 2 properties to compare.", "info");
             return;
         }
 
@@ -2481,11 +2541,11 @@ document.addEventListener('DOMContentLoaded', () => {
     window.toggleCompare = toggleCompare;
     window.renderComparisonTable = renderComparisonTable;
     window.dispatchCardClick = (id) => {
-        const prop = Storage.getPropertyById(id);
+        const prop = EstatoStorage.getPropertyById(id);
         if (!prop) return;
 
         // Track View
-        if (currentUser) Storage.addRecentView(currentUser.id, id);
+        if (currentUser) EstatoStorage.addRecentView(currentUser.id, id);
 
         const isAuthorizedToEdit = (currentUser.role === 'Seller' && prop.ownerId === currentUser.id) || currentUser.role === 'Admin';
 
@@ -2508,18 +2568,18 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
-                const prop = Storage.getPropertyById(id);
+                const prop = EstatoStorage.getPropertyById(id);
                 if (prop) openModal(prop);
             });
         });
 
         parent.querySelectorAll('.delete-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 if (confirm('Are you sure you want to delete this listing?')) {
-                    const success = Storage.deleteProperty(e.currentTarget.getAttribute('data-id'));
-                    if(!success) {
-                        alert("Unauthorized Action");
+                    const success = await EstatoStorage.deleteProperty(e.currentTarget.getAttribute('data-id'));
+                    if (!success) {
+                        showToast('Unauthorized: You can only delete your own listings.', 'danger');
                     }
                 }
             });
@@ -2529,7 +2589,7 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
-                Storage.toggleFavorite(id);
+                EstatoStorage.toggleFavorite(id);
             });
         });
 
@@ -2547,7 +2607,7 @@ document.addEventListener('DOMContentLoaded', () => {
         parent.querySelectorAll('.pdf-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const id = e.currentTarget.getAttribute('data-id');
-                const prop = Storage.getPropertyById(id);
+                const prop = EstatoStorage.getPropertyById(id);
                 if (prop) await generateFlyer(prop);
             });
         });
@@ -2557,7 +2617,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
                 if (confirm('Approve this listing for public view?')) {
-                    const success = await Storage.approveProperty(id);
+                    const success = await EstatoStorage.approveProperty(id);
                     if (success) {
                         renderView(currentView, searchInput.value);
                     }
@@ -2571,7 +2631,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const id = e.currentTarget.getAttribute('data-id');
                 const reason = prompt('Please provide a reason for rejecting this listing (will be sent to the seller):');
                 if (reason !== null) {
-                    const success = await Storage.rejectProperty(id, reason.trim() || undefined);
+                    const success = await EstatoStorage.rejectProperty(id, reason.trim() || undefined);
                     if (success) {
                         renderView(currentView, searchInput.value);
                     }
@@ -2716,7 +2776,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tip) tip.style.display = '';
     }
 
-    function handleFormSubmit(e) {
+    async function handleFormSubmit(e) {
         e.preventDefault();
         
         const id = document.getElementById('propId').value;
@@ -2730,7 +2790,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const lng     = document.getElementById('propLng').value;
 
         if (!title || !city || !address || !price || !pinCode || !lat || !lng) {
-            alert('Please fill in all required fields (Title, City, Address, PIN Code, Price, and Location Coordinates).');
+            showToast('Please fill in all required fields: Title, City, Address, PIN Code, Price, and Location.', 'warning');
             return;
         }
 
@@ -2753,30 +2813,41 @@ document.addEventListener('DOMContentLoaded', () => {
             images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
         };
 
-        if (id) {
-            Storage.updateProperty(newProperty);
-        } else {
-            Storage.addProperty(newProperty);
-        }
+        // Show loading state on the submit button to prevent double-submits
+        const submitBtn = propertyForm.querySelector('[type="submit"]');
+        const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+        if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Saving...'; }
 
-        closeModal();
-        populateCitiesDatalist();
-        
-        setActiveNav('properties');
-        currentFilterCity = null; 
-        currentSort = 'newest';
-        currentTypeFilter = '';
-        currentStatusFilter = '';
+        try {
+            if (id) {
+                await EstatoStorage.updateProperty(newProperty);
+                showToast('Listing updated successfully!', 'success');
+            } else {
+                await EstatoStorage.addProperty(newProperty);
+                showToast(currentUser && currentUser.role === 'Admin' ? 'Listing published!' : 'Listing submitted for review!', 'success');
+            }
+            closeModal();
+            populateCitiesDatalist();
+            setActiveNav('properties');
+            currentFilterCity = null;
+            currentSort = 'newest';
+            currentTypeFilter = '';
+            currentStatusFilter = '';
+        } catch(err) {
+            console.error('Form submit failed:', err);
+            showToast('Error saving listing: ' + err.message, 'danger');
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHtml; }
+        }
     }
 
     function populateCitiesDatalist() {
-        const cities = Storage.getCities();
+        const cities = EstatoStorage.getCities();
         citiesListDropdown.innerHTML = cities.map(c => `<option value="${c}">`).join('');
     }
 
     // --- Notifications ---
     function renderNotifications() {
-        const notifs = Storage.getNotifications();
+        const notifs = EstatoStorage.getNotifications();
         const unreadCount = notifs.filter(n => !n.read).length;
 
         // Update Badge
@@ -2802,7 +2873,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="notif-item ${n.read ? '' : 'unread'}" onclick="window.dispatchNotifClick('${n.meta ? n.meta.id : ''}')">
                     <div class="notif-icon"><i class="ph-duotone ${iconClass}"></i></div>
                     <div class="notif-content">
-                        <p>${n.message}</p>
+                        <p>${escapeHtml(n.message)}</p>
                         <span class="notif-time">${new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                 </div>
@@ -2812,9 +2883,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.dispatchNotifClick = (propertyId) => {
         if (propertyId) {
-            const prop = Storage.getPropertyById(propertyId);
+            const prop = EstatoStorage.getPropertyById(propertyId);
             if (prop) {
-                if (currentUser) Storage.addRecentView(currentUser.id, propertyId);
+                if (currentUser) EstatoStorage.addRecentView(currentUser.id, propertyId);
                 notifDropdown.classList.add('hidden');
                 // Fallback to dispatchCardClick logic if openPropertyDetails missing
                 window.dispatchCardClick(propertyId);
@@ -2823,7 +2894,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     function renderAdminActivityFeed() {
-        const activities = Storage.getActivities().slice(0, 15);
+        const activities = EstatoStorage.getActivities().slice(0, 15);
         
         const getActionStyle = (action) => {
             if (action.includes('ADD')) return { icon: 'ph-plus-circle', color: '#10b981' };
@@ -2867,12 +2938,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <div style="flex: 1; min-width: 0;">
                                     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 4px;">
                                         <div style="font-weight: 700; font-size: 1rem; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                            ${act.userName}
-                                            <span style="font-weight: 400; color: var(--text-muted); font-size: 0.8rem; background: var(--bg-main); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); margin-left: 6px;">${act.role}</span>
+                                            ${escapeHtml(act.userName)}
+                                            <span style="font-weight: 400; color: var(--text-muted); font-size: 0.8rem; background: var(--bg-main); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); margin-left: 6px;">${escapeHtml(act.role)}</span>
                                         </div>
                                         <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 500; white-space: nowrap;">${timeAgo(act.timestamp)}</div>
                                     </div>
-                                    <div style="font-size: 0.95rem; color: var(--text-main); line-height: 1.5; font-weight: 450;">${act.details}</div>
+                                    <div style="font-size: 0.95rem; color: var(--text-main); line-height: 1.5; font-weight: 450;">${escapeHtml(act.details)}</div>
                                 </div>
                             </div>
                         `;
@@ -2950,7 +3021,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
         } catch(e) {
             console.error('PDF Gen Error:', e);
-            alert("Error generating PDF flyer.");
+            showToast('Error generating PDF flyer. Check console for details.', 'danger');
         } finally {
             document.body.removeChild(flyerDiv);
         }
@@ -2961,7 +3032,7 @@ document.addEventListener('DOMContentLoaded', () => {
     /** ── Backup & Restore Logic ── **/
     function exportBackup() {
         try {
-            const data = Storage.getData();
+            const data = EstatoStorage.getData();
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -2972,10 +3043,10 @@ document.addEventListener('DOMContentLoaded', () => {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            alert('Backup created successfully!');
+            showToast('Backup downloaded successfully!', 'success');
         } catch(e) {
             console.error('Backup failed:', e);
-            alert('Error generating backup file.');
+            showToast('Error generating backup file.', 'danger');
         }
     }
 
@@ -2988,15 +3059,19 @@ document.addEventListener('DOMContentLoaded', () => {
         reader.onload = async (e) => {
             try {
                 const json = JSON.parse(e.target.result);
-                Storage.restoreData(json);
-                alert("Restoration successful! The application will now reload to apply changes.");
-                location.reload();
+                const ok = await EstatoStorage.restoreData(json);
+                if (ok) {
+                    showToast('Restoration successful! Reloading now...', 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast('Restore failed: Unauthorized or invalid backup file.', 'danger');
+                }
             } catch(err) {
                 console.error('Restore failed:', err);
-                alert("Restoration failed: " + err.message);
+                showToast('Restore failed: ' + err.message, 'danger');
             }
         };
-        reader.onerror = () => alert("Error reading backup file.");
+        reader.onerror = () => showToast('Error reading backup file.', 'danger');
         reader.readAsText(file);
     }
 
@@ -3055,8 +3130,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Expose to global if needed
     window.reauthorizeDrive = async () => {
-        const user = Storage.getCurrentUser();
-        const success = await Storage.loginWithGoogle(user ? user.role : 'Seller', false);
+        const user = EstatoStorage.getCurrentUser();
+        const success = await EstatoStorage.loginWithGoogle(user ? user.role : 'Seller', false);
         if (success) {
             alert('Re-authorization successful! You can now upload images.');
             // Refresh preview area if it showed the error

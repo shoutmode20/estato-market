@@ -3,30 +3,26 @@
 // Estato | Premium Real Estate Marketplace
 // ================================================================
 
-const firebaseConfig = {
-    apiKey: "AIzaSyB4nGqV9xPiF5W13npX8tjTHXv_Bosj2PU",
-    authDomain: "estato-marketplace.firebaseapp.com",
-    databaseURL: "https://estato-marketplace-default-rtdb.firebaseio.com/",
-    projectId: "estato-marketplace",
-    storageBucket: "estato-marketplace.firebasestorage.app",
-    messagingSenderId: "186201359877",
-    appId: "1:186201359877:web:7a9a50e18327f75ab0fe6c",
-    measurementId: "G-QD2GP8TXDZ"
-};
-
-// Initialize Firebase if not already initialized
-if (!firebase.apps.length) {
-    firebase.initializeApp(firebaseConfig);
+// Initialize Firebase using global config injected by config.js
+// Guard: If SDK or Config is missing, skip Firebase initialization
+if (typeof firebase === 'undefined' || !window.firebaseConfig) {
+    console.error("[Estato] Firebase SDK or Config is missing. App will run in limited offline mode.");
 }
 
-const db = firebase.database();
-const auth = firebase.auth();
-const provider = new firebase.auth.GoogleAuthProvider();
-provider.addScope('https://www.googleapis.com/auth/drive.file');
+// Initialize Firebase if not already initialized
+if (typeof firebase !== 'undefined' && !firebase.apps.length && window.firebaseConfig) {
+    firebase.initializeApp(window.firebaseConfig);
+}
+
+const db = (typeof firebase !== 'undefined') ? firebase.database() : null;
+const auth = (typeof firebase !== 'undefined') ? firebase.auth() : null;
+const provider = (typeof firebase !== 'undefined') ? new firebase.auth.GoogleAuthProvider() : null;
+if (provider) provider.addScope('https://www.googleapis.com/auth/drive.file');
+
 
 // Enable Firebase Realtime Database Persistence
 try {
-    db.ref().keepSynced(true);
+    if (db) db.ref().keepSynced(true);
 } catch(e) {
     console.warn("Persistence failed to initialize:", e);
 }
@@ -47,6 +43,7 @@ let _memCache = {
 };
 
 let _syncCallback = null;
+let _listenersInitialized = false;  // Guard: prevent stacking duplicate realtime listeners on re-auth
 let _dataChangeListeners = [];
 
 // Local formatter for notification messages
@@ -57,7 +54,7 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
 });
 
 // ─── Public Storage API ───────────────────────────────────────────
-const Storage = {
+var EstatoStorage = {
     getCurrentUser() { return _memCache.currentUser; },
 
     async initDrive(syncCb) {
@@ -134,10 +131,16 @@ const Storage = {
     },
 
     async loadAllData() {
+        if (_listenersInitialized) {
+            console.log('[Estato Firebase] Listeners already active — skipping re-init to prevent stacking.');
+            return;
+        }
+        _listenersInitialized = true;
         const uid = _memCache.currentUser.id;
         const role = _memCache.currentUser.role;
         
         console.log("[Estato Firebase] Initializing Real-time Listeners...");
+        if (!db) return;
         
         try {
             // 1. Listen for Latest Properties (Real-time sync for the first batch)
@@ -200,11 +203,12 @@ const Storage = {
     },
 
     logout() {
+        _driveAccessToken = null;          // Clear OAuth token so it can't be reused after session ends
+        _listenersInitialized = false;     // Allow fresh listener registration on next login
         auth.signOut();
         _memCache.currentUser = null;
     },
 
-    getCurrentUser() { return _memCache.currentUser; },
     getData() { return _memCache; },
     hasPendingSync() { return false; },
     async _flushPendingSync() { return true; }, // Stub for compatibility
@@ -212,6 +216,12 @@ const Storage = {
     /** RESTORE DATA FROM BACKUP */
     async restoreData(data) {
         if (!data || typeof data !== 'object') return false;
+        // Security: Enforce admin-only restore on the client side
+        // (Firebase rules will also block non-admin writes at each child path)
+        if (!_memCache.currentUser || _memCache.currentUser.role !== 'Admin') {
+            console.error('[Estato] Unauthorized: restoreData() is restricted to Admins.');
+            return false;
+        }
         if (_syncCallback) _syncCallback('syncing');
 
         try {
@@ -334,7 +344,8 @@ const Storage = {
                 prop.priceHistory.push({ price: Number(updatedProp.price), date: new Date().toISOString() });
             }
 
-            // Optimistic update
+            // Optimistic update — snapshot for rollback if Firebase write fails
+            const _updateBackup = { ...prop, priceHistory: prop.priceHistory ? [...prop.priceHistory] : [] };
             _memCache.properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId };
 
             try {
@@ -342,7 +353,10 @@ const Storage = {
                 this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
                 if (_syncCallback) _syncCallback('synced');
             } catch(e) {
-                console.error(e);
+                console.error('[Estato] updateProperty write failed, rolling back:', e);
+                // Rollback optimistic update so UI stays in sync with DB
+                _memCache.properties[index] = _updateBackup;
+                this.notifyListeners();
                 if (_syncCallback) _syncCallback('error');
             }
             return true;
@@ -359,6 +373,8 @@ const Storage = {
         const isAuthorized = _memCache.currentUser && (_memCache.currentUser.role === 'Admin' || prop.ownerId === _memCache.currentUser.id);
         if (!isAuthorized) return false;
 
+        // Snapshot the property for rollback before the optimistic delete
+        const _deleteBackup = { ...prop };
         _memCache.properties.splice(index, 1);
         try {
             await db.ref('properties/' + id).remove();
@@ -372,7 +388,10 @@ const Storage = {
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch(e) {
-            console.error(e);
+            console.error('[Estato] deleteProperty write failed, rolling back:', e);
+            // Rollback: re-insert the property at its original position
+            _memCache.properties.splice(index, 0, _deleteBackup);
+            this.notifyListeners();
             if (_syncCallback) _syncCallback('error');
             return false;
         }
@@ -467,6 +486,16 @@ const Storage = {
     
     async addInquiry(inquiry) {
         if (_syncCallback) _syncCallback('syncing');
+
+        // Rate limiting: one inquiry per buyer per property to prevent spam
+        const duplicate = _memCache.inquiries.find(i =>
+            i.buyerId === inquiry.buyerId && i.propertyId === inquiry.propertyId
+        );
+        if (duplicate) {
+            if (_syncCallback) _syncCallback('synced');
+            throw new Error('You have already sent an inquiry for this property. Check your Messages tab for any reply.');
+        }
+
         inquiry.id = 'inq_' + Date.now();
         inquiry.date = new Date().toISOString();
         inquiry.read = false;
@@ -756,3 +785,5 @@ const Storage = {
         }
     }
 };
+window.EstatoStorage = EstatoStorage;
+
