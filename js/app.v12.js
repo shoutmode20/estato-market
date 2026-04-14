@@ -2016,7 +2016,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ` : '';
 
         return `
-            <div class="property-card" style="animation-delay: ${index * 0.05}s" ${isOwnerOfListing ? `onclick="window.dispatchCardClick('${prop.id}')"` : ''}>
+            <div class="property-card" style="animation-delay: ${index * 0.05}s" onclick="window.dispatchCardClick('${prop.id}')">
                 <div class="card-img">
                     ${carouselHTML}
                     <div class="badges">
@@ -2057,7 +2057,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button class="btn btn-secondary btn-icon shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews">
                             <i class="ph ph-chat-centered-text"></i>
                         </button>
-                        <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map">
+                        <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map" onclick="event.stopPropagation()">
                             <i class="ph ph-map-pin-line"></i>
                         </a>
                         ${(role === 'Admin' && prop.status === 'Pending') ? `
@@ -2857,6 +2857,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         parent.querySelectorAll('.reviews-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const propId = e.currentTarget.getAttribute('data-id');
                 window.openReviewModal(propId);
             });
@@ -2864,6 +2865,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         parent.querySelectorAll('.trend-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const propId = e.currentTarget.getAttribute('data-id');
                 window.openPriceHistoryModal(propId);
             });
