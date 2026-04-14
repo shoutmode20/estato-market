@@ -2054,6 +2054,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button class="btn btn-secondary btn-icon shadow-hover pdf-btn" data-id="${prop.id}" title="Download Flyer">
                             <i class="ph ph-file-pdf"></i>
                         </button>
+                        <button class="btn btn-secondary btn-icon shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews">
+                            <i class="ph ph-chat-centered-text"></i>
+                        </button>
                         <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map">
                             <i class="ph ph-map-pin-line"></i>
                         </a>
@@ -2065,7 +2068,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             <button class="btn btn-danger btn-icon delete-btn shadow-hover" data-id="${prop.id}" title="Delete Listing"><i class="ph ph-trash"></i></button>
                         ` : `
                             <button class="btn btn-secondary shadow-hover trend-btn" data-id="${prop.id}" title="Price History"><i class="ph ph-chart-line"></i></button>
-                            <button class="btn btn-secondary shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews"><i class="ph ph-chat-centered-text"></i></button>
                             <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${escapeHtml(prop.title)}" style="flex: 1.2;" title="Message Seller Securely"><i class="ph ph-envelope-simple"></i> Contact</button>
                         `}
                     </div>
