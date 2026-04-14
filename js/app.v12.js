@@ -2646,20 +2646,126 @@ document.addEventListener('DOMContentLoaded', () => {
         // Track View
         if (currentUser) EstatoStorage.addRecentView(currentUser.id, id);
 
-        const isAuthorizedToEdit = currentUser && ((currentUser.role === 'Seller' && prop.ownerId === currentUser.id) || currentUser.role === 'Admin');
+        window.openPropertyDetails(prop);
+        updateSeoMetadata(prop);
+    };
 
-        if (isAuthorizedToEdit) {
-            openModal(prop);
+    window.openPropertyDetails = (prop) => {
+        document.getElementById('detailsTitle').textContent = prop.title;
+        document.getElementById('detailsLocation').innerHTML = `<i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}`;
+        
+        // Images
+        const images = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const imgHtml = `
+            <div style="position:relative; width:100%; height:300px; display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:0.5rem; padding-bottom: 0.5rem;">
+                ${images.map(img => `<img src="${img}" style="height:100%; min-width:100%; object-fit:cover; scroll-snap-align:start; border-radius:var(--radius-md);">`).join('')}
+            </div>
+        `;
+        document.getElementById('detailsImageCarousel').innerHTML = imgHtml;
+
+        // Metrics
+        document.getElementById('detailsMetrics').innerHTML = `
+            <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-house-line" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Type:</strong> ${prop.type}</div>
+            <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-list-dashes" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Category:</strong> ${prop.category || 'N/A'}</div>
+            <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-bed" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Layout:</strong> ${prop.bhk || 'N/A'}</div>
+            <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-ruler" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Area:</strong> ${prop.area ? prop.area.toLocaleString() + ' sq.ft' : 'N/A'}</div>
+            <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-info" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Status:</strong> ${prop.status}</div>
+        `;
+
+        // Lister
+        const ownerName = prop.ownerName || 'Estato User';
+        document.getElementById('detailsLister').innerHTML = `
+            <div style="display:flex; align-items:center; gap:1rem;">
+                <div class="avatar" style="width:40px; height:40px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; border-radius:50%; font-weight:bold; font-size: 1.2rem;">${ownerName.charAt(0)}</div>
+                <div>
+                    <h5 style="margin:0; font-size:1rem; color:var(--text-main);">${escapeHtml(ownerName)}</h5>
+                    <p style="margin:0; font-size:0.85rem; color:var(--text-muted);"><i class="ph-fill ph-seal-check" style="color:var(--primary);"></i> Verified Seller</p>
+                </div>
+            </div>
+        `;
+
+        // Description
+        document.getElementById('detailsDescription').textContent = prop.description || 'No description provided for this listing.';
+
+        // Ratings
+        const reviews = EstatoStorage.getReviewsByProperty(prop.id);
+        let ratingsHtml = '';
+        if (reviews.length === 0) {
+            ratingsHtml = `<div style="font-size:0.9rem; color:var(--text-muted); font-style:italic;">No ratings yet.</div>`;
         } else {
-            const view = 'properties'; 
-            setActiveNav(view);
-            if (typeof toggleMapView === 'function') toggleMapView(false);
-            
-            // Set search to ID for precise filtering in the grid
-            searchInput.value = prop.id; 
-            renderView(view, prop.id); 
-            updateSeoMetadata(prop);
+            const ratingData = EstatoStorage.getAverageRating(prop.id);
+            ratingsHtml = `
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
+                    <div style="font-size:1.5rem; font-weight:700; color:var(--text-main);">${ratingData.average}</div>
+                    <div style="color:#fbbf24; font-size:1.2rem;">
+                        <i class="ph-fill ph-star"></i>
+                    </div>
+                    <div style="font-size:0.9rem; color:var(--text-muted);">(${ratingData.count} ratings)</div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.75rem;">
+                    ${reviews.slice(0, 3).map(rev => `
+                        <div style="background:var(--bg-main); padding:0.75rem; border-radius:var(--radius-sm); border:1px solid var(--border-color);">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem;">
+                                <span style="font-weight:600; font-size:0.85rem;">${escapeHtml(rev.userName)}</span>
+                                <div style="color:#fbbf24; font-size:0.75rem;">${Array(5).fill(0).map((_, i) => `<i class="${i < rev.rating ? 'ph-fill' : 'ph'} ph-star"></i>`).join('')}</div>
+                            </div>
+                            <div style="font-size:0.85rem; color:var(--text-muted);">${escapeHtml(rev.comment)}</div>
+                        </div>
+                    `).join('')}
+                    ${reviews.length > 3 ? `<div style="font-size:0.85rem; color:var(--primary); font-weight:600; margin-top:0.5rem; cursor:pointer;" onclick="window.openReviewModal('${prop.id}')">View all reviews...</div>` : ''}
+                </div>
+            `;
         }
+        document.getElementById('detailsRatingsContainer').innerHTML = ratingsHtml;
+
+        // Footer Price & Buttons
+        document.getElementById('detailsPrice').innerHTML = `${currencyFormatter.format(prop.price)} <span style="font-size:1rem; color:var(--text-muted); font-weight:500;">${prop.type === 'Rent' ? '/ mo' : ''}</span>`;
+        
+        const role = currentUser ? currentUser.role : 'Buyer';
+        const userId = currentUser ? currentUser.id : null;
+        const isOwnerOfListing = (role === 'Seller' && prop.ownerId === userId) || role === 'Admin';
+        const favs = EstatoStorage.getFavorites();
+        const isFav = favs.includes(prop.id);
+
+        let btnHtml = '';
+        if (isOwnerOfListing) {
+            btnHtml = `
+                <button class="btn btn-secondary shadow-hover" onclick="document.getElementById('propertyDetailsModal').classList.remove('active'); window.openModal(EstatoStorage.getPropertyById('${prop.id}'))" style="gap:0.5rem;"><i class="ph ph-pencil-simple"></i> Edit Details</button>
+            `;
+        } else {
+            btnHtml = `
+                <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
+                    <i class="ph ${isFav ? 'ph-heart-fill' : 'ph-heart'}"></i>
+                </button>
+                <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${escapeHtml(prop.title)}" style="gap:0.5rem;"><i class="ph ph-envelope-simple"></i> Contact Seller</button>
+            `;
+        }
+        document.getElementById('detailsActionBtns').innerHTML = btnHtml;
+
+        // Attach local listeners for dynamic buttons inside modal
+        const footerBtns = document.getElementById('detailsActionBtns');
+        const contactBtn = footerBtns.querySelector('.contact-btn');
+        if (contactBtn) {
+            contactBtn.addEventListener('click', (e) => {
+                document.getElementById('propertyDetailsModal').classList.remove('active');
+                document.getElementById('inqPropertyId').value = prop.id;
+                document.getElementById('inqOwnerId').value = prop.ownerId;
+                document.getElementById('inqPropertyTitle').value = prop.title;
+                document.getElementById('inquiryModal').classList.add('active');
+            });
+        }
+        const favBtn = footerBtns.querySelector('.fav-btn');
+        if (favBtn) {
+            favBtn.addEventListener('click', (e) => {
+                EstatoStorage.toggleFavorite(prop.id);
+                const isNowFav = EstatoStorage.getFavorites().includes(prop.id);
+                favBtn.classList.toggle('active', isNowFav);
+                favBtn.querySelector('i').className = isNowFav ? 'ph-fill ph-heart' : 'ph ph-heart';
+                renderView(currentView, searchInput.value); // Re-render background grid silently
+            });
+        }
+
+        document.getElementById('propertyDetailsModal').classList.add('active');
     };
 
     function attachCardListeners(parent = document) {

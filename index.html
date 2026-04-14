@@ -421,6 +421,51 @@
         </div>
     </div>
 
+    <!-- Property Details Modal -->
+    <div class="modal-overlay" id="propertyDetailsModal">
+        <div class="modal surface-panel" style="max-width: 800px; width: 95%;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="detailsTitle" style="font-size: 1.5rem; margin-bottom: 0.25rem;">Property Name</h3>
+                    <p id="detailsLocation" style="font-size: 0.95rem; color: var(--text-muted); margin: 0;"><i class="ph ph-map-pin"></i> Location</p>
+                </div>
+                <button class="close-btn" onclick="document.getElementById('propertyDetailsModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
+                <div id="detailsImageCarousel" style="margin-bottom: 1.5rem; border-radius: var(--radius-md); overflow: hidden; background: var(--bg-hover);">
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+                    <div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Property Details</h4>
+                        <div id="detailsMetrics" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.95rem;">
+                        </div>
+                    </div>
+                    <div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Listed By</h4>
+                        <div id="detailsLister" style="display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; background: var(--bg-hover); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 2rem;">
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Description</h4>
+                    <p id="detailsDescription" style="line-height: 1.6; color: var(--text-muted); white-space: pre-wrap; font-size: 0.95rem;"></p>
+                </div>
+                
+                <div>
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Previous Ratings</h4>
+                    <div id="detailsRatingsContainer">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; border-top: 1px solid var(--border-color);">
+               <div id="detailsPrice" style="font-size: 1.5rem; font-weight: 700; color: var(--primary);"></div>
+               <div id="detailsActionBtns" style="display: flex; gap: 0.5rem;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Price History Trend Modal -->
     <div class="modal-overlay" id="priceModal">
         <div class="modal surface-panel" style="max-width: 700px;">
@@ -454,8 +499,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <script src="./js/config.js"></script>
-    <script src="./js/storage.js?v=12.3"></script>
-    <script src="./js/app.v12.js?v=12.3"></script>
+    <script src="./js/storage.js?v=12.5"></script>
+    <script src="./js/app.v12.js?v=12.5"></script>
     <!-- PWA Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {
