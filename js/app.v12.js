@@ -2055,7 +2055,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <i class="ph ph-file-pdf"></i>
                         </button>
                         <button class="btn btn-secondary btn-icon shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews">
-                            <i class="ph ph-chat-centered-text"></i>
+                            <i class="ph-duotone ph-star"></i>
                         </button>
                         <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map" onclick="event.stopPropagation()">
                             <i class="ph ph-map-pin-line"></i>
