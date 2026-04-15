@@ -1886,7 +1886,7 @@ document.addEventListener('DOMContentLoaded', () => {
             changeRoleBtn.addEventListener('click', () => {
                 const newRole = currentUser.role === 'Buyer' ? 'Seller' : 'Buyer';
                 showConfirm(
-                    `Switch your account to <strong>${newRole}</strong>?\n\n` +
+                    `Switch your account to ${newRole}?\n\n` +
                     (newRole === 'Seller'
                         ? 'As a Seller, you can list properties and manage inquiries from buyers.'
                         : 'As a Buyer, you can browse listings, save favorites, and send inquiries.'),
