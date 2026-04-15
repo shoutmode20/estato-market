@@ -23,7 +23,7 @@ if (provider) provider.addScope('https://www.googleapis.com/auth/drive.file');
 // Enable Firebase Realtime Database Persistence
 try {
     if (db) db.ref().keepSynced(true);
-} catch(e) {
+} catch (e) {
     console.warn("Persistence failed to initialize:", e);
 }
 
@@ -67,13 +67,13 @@ var EstatoStorage = {
         try {
             if (_syncCallback) _syncCallback('syncing');
             let user = auth.currentUser;
-            
+
             if (!user) {
                 if (silent) {
                     await new Promise((resolve, reject) => {
                         const unsub = auth.onAuthStateChanged(u => {
                             unsub();
-                            if(u) resolve(u); else reject(new Error('no_session'));
+                            if (u) resolve(u); else reject(new Error('no_session'));
                         });
                     });
                     user = auth.currentUser;
@@ -94,7 +94,7 @@ var EstatoStorage = {
             let userRef = db.ref('users/' + user.uid);
             let userSnap = await userRef.get();
             let roleToUse = selectedRole;
-            
+
             if (!userSnap.exists()) {
                 // First time sign-up
                 await userRef.set({
@@ -123,7 +123,7 @@ var EstatoStorage = {
 
             if (_syncCallback) _syncCallback('synced');
             return true;
-        } catch(e) {
+        } catch (e) {
             console.warn('[Estato Firebase] Auth Flow interrupted:', e.message);
             if (_syncCallback) _syncCallback('error');
             return false;
@@ -138,17 +138,17 @@ var EstatoStorage = {
         _listenersInitialized = true;
         const uid = _memCache.currentUser.id;
         const role = _memCache.currentUser.role;
-        
+
         console.log("[Estato Firebase] Initializing Real-time Listeners...");
         if (!db) return;
-        
+
         try {
             // 1. Listen for Latest Properties (Real-time sync for the first batch)
             db.ref('properties').limitToLast(20).on('value', (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 this.mergeProperties(latestBatch);
-                
+
                 this.notifyListeners();
             });
 
@@ -190,14 +190,14 @@ var EstatoStorage = {
                 }
                 this.notifyListeners();
             });
-            
+
             // 6. Listen for reviews
             db.ref('reviews').on('value', (snap) => {
                 _memCache.reviews = snap.exists() ? Object.values(snap.val()) : [];
                 this.notifyListeners();
             });
 
-        } catch(e) {
+        } catch (e) {
             console.error("[Estato Firebase] Failed to initialize listeners", e);
         }
     },
@@ -227,14 +227,14 @@ var EstatoStorage = {
         try {
             // Overwrite entire database (Careful!)
             await db.ref().set(data);
-            
+
             // Re-hydrate local cache
             _memCache = { ..._memCache, ...data };
             this.notifyListeners();
-            
+
             if (_syncCallback) _syncCallback('synced');
             return true;
-        } catch(e) {
+        } catch (e) {
             console.error("Restore failed:", e);
             if (_syncCallback) _syncCallback('error');
             return false;
@@ -258,7 +258,7 @@ var EstatoStorage = {
     mergeProperties(newBatch) {
         const existing = new Map(_memCache.properties.map(p => [p.id, p]));
         newBatch.forEach(p => existing.set(p.id, p));
-        
+
         // Sort by date/ID descending
         _memCache.properties = Array.from(existing.values())
             .sort((a, b) => b.id.localeCompare(a.id));
@@ -270,7 +270,7 @@ var EstatoStorage = {
 
     async loadMoreProperties() {
         if (_memCache.properties.length === 0) return;
-        
+
         // Get the oldest ID we have (they are sorted descending)
         const oldestId = _memCache.properties[_memCache.properties.length - 1].id;
         console.log("[Storage] Fetching properties before:", oldestId);
@@ -304,7 +304,7 @@ var EstatoStorage = {
         property.id = 'prop_' + Date.now();
         property.ownerId = _memCache.currentUser.id;
         property.priceHistory = [{ price: property.price, date: new Date().toISOString() }];
-        
+
         // Enforce Pending status for new listings (Fraud Prevention)
         if (_memCache.currentUser.role !== 'Admin') {
             property.status = 'Pending';
@@ -321,7 +321,7 @@ var EstatoStorage = {
             this.addNotification(`New property listed: ${property.title}`, 'new_listing', { id: property.id });
             this.logActivity('ADD_PROPERTY', `Added new ${property.category}: ${property.title}`);
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             if (_syncCallback) _syncCallback('error');
         }
@@ -334,7 +334,7 @@ var EstatoStorage = {
         if (index !== -1) {
             const prop = _memCache.properties[index];
             const user = _memCache.currentUser;
-            
+
             const isAuthorized = user && (user.role === 'Admin' || prop.ownerId === user.id);
             if (!isAuthorized) return false;
 
@@ -352,7 +352,7 @@ var EstatoStorage = {
                 await db.ref('properties/' + updatedProp.id).update(_memCache.properties[index]);
                 this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
                 if (_syncCallback) _syncCallback('synced');
-            } catch(e) {
+            } catch (e) {
                 console.error('[Estato] updateProperty write failed, rolling back:', e);
                 // Rollback optimistic update so UI stays in sync with DB
                 _memCache.properties[index] = _updateBackup;
@@ -368,7 +368,7 @@ var EstatoStorage = {
         if (_syncCallback) _syncCallback('syncing');
         const index = _memCache.properties.findIndex(p => p.id === id);
         if (index === -1) return false;
-        
+
         const prop = _memCache.properties[index];
         const isAuthorized = _memCache.currentUser && (_memCache.currentUser.role === 'Admin' || prop.ownerId === _memCache.currentUser.id);
         if (!isAuthorized) return false;
@@ -379,7 +379,7 @@ var EstatoStorage = {
         try {
             await db.ref('properties/' + id).remove();
             this.logActivity('DELETE_PROPERTY', `Archived listing: ${prop.title} (${id})`);
-            
+
             // If Admin deleted someone else's property, notify them
             if (_memCache.currentUser.role === 'Admin' && prop.ownerId !== _memCache.currentUser.id) {
                 await this.sendUserNotification(prop.ownerId, `Your listing "${prop.title}" was removed by an Admin.`, 'danger', { id: id });
@@ -387,7 +387,7 @@ var EstatoStorage = {
 
             if (_syncCallback) _syncCallback('synced');
             return true;
-        } catch(e) {
+        } catch (e) {
             console.error('[Estato] deleteProperty write failed, rolling back:', e);
             // Rollback: re-insert the property at its original position
             _memCache.properties.splice(index, 0, _deleteBackup);
@@ -410,7 +410,7 @@ var EstatoStorage = {
                 read: false
             });
             await db.ref('notifications/' + userId).set({ items });
-        } catch(e) {
+        } catch (e) {
             console.error("Failed to send remote notification", e);
         }
     },
@@ -431,7 +431,7 @@ var EstatoStorage = {
             await this.sendUserNotification(_memCache.properties[index].ownerId, `Listing Approved: ${_memCache.properties[index].title}`, 'success', { id: id });
             if (_syncCallback) _syncCallback('synced');
             return true;
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             if (_syncCallback) _syncCallback('error');
             return false;
@@ -452,10 +452,10 @@ var EstatoStorage = {
             this.logActivity('REJECT_PROPERTY', `Admin rejected listing: ${_memCache.properties[index].title}`);
             // Force notification to the Seller (Owner)
             await this.sendUserNotification(_memCache.properties[index].ownerId, `Your listing "${_memCache.properties[index].title}" was rejected. Reason: ${reason}`, 'warning', { id: id });
-            
+
             if (_syncCallback) _syncCallback('synced');
             return true;
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             if (_syncCallback) _syncCallback('error');
             return false;
@@ -471,11 +471,11 @@ var EstatoStorage = {
         const index = _memCache.favorites.indexOf(id);
         if (index === -1) _memCache.favorites.push(id);
         else _memCache.favorites.splice(index, 1);
-        
+
         try {
             await db.ref('favorites/' + _memCache.currentUser.id).set({ ids: _memCache.favorites });
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             if (_syncCallback) _syncCallback('error');
         }
     },
@@ -483,7 +483,7 @@ var EstatoStorage = {
     // ── Cities / CRM ──
     getCities() { return _memCache.cities; },
     getInquiries() { return _memCache.inquiries; },
-    
+
     async addInquiry(inquiry) {
         if (_syncCallback) _syncCallback('syncing');
 
@@ -499,12 +499,12 @@ var EstatoStorage = {
         inquiry.id = 'inq_' + Date.now();
         inquiry.date = new Date().toISOString();
         inquiry.read = false;
-        
+
         _memCache.inquiries.push(inquiry);
-        
+
         try {
             await db.ref('inquiries/' + inquiry.id).set(inquiry);
-            
+
             // Add notification to the seller
             const notifRef = db.ref('notifications/' + inquiry.ownerId);
             const docSnap = await notifRef.get();
@@ -518,9 +518,9 @@ var EstatoStorage = {
                 read: false
             });
             await notifRef.set({ items: items });
-            
+
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             if (_syncCallback) _syncCallback('error');
         }
         return inquiry;
@@ -533,14 +533,14 @@ var EstatoStorage = {
 
         const inquiry = _memCache.inquiries[index];
         if (!inquiry.replies) inquiry.replies = [];
-        
+
         replyPayload.id = 'reply_' + Date.now();
         replyPayload.date = new Date().toISOString();
         inquiry.replies.push(replyPayload);
 
         try {
             await db.ref('inquiries/' + inquiryId + '/replies').set(inquiry.replies);
-            
+
             // Add notification to the receiver
             const receiverId = replyPayload.senderRole === 'Buyer' ? inquiry.ownerId : inquiry.buyerId;
             const notifRef = db.ref('notifications/' + receiverId);
@@ -557,7 +557,7 @@ var EstatoStorage = {
             await notifRef.set({ items: items });
 
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             if (_syncCallback) _syncCallback('error');
         }
         return replyPayload;
@@ -567,12 +567,12 @@ var EstatoStorage = {
         if (_syncCallback) _syncCallback('syncing');
         const index = _memCache.inquiries.findIndex(i => i.id === id);
         if (index === -1) return false;
-        
+
         _memCache.inquiries.splice(index, 1);
         try {
             await db.ref('inquiries/' + id).remove();
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             if (_syncCallback) _syncCallback('error');
         }
         return true;
@@ -591,17 +591,17 @@ var EstatoStorage = {
             read: false
         };
         _memCache.notifications.unshift(notification);
-        
+
         try {
             await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
-        } catch(e) {}
+        } catch (e) { }
     },
 
     async markNotificationsRead() {
         _memCache.notifications.forEach(n => n.read = true);
         try {
             await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
-        } catch(e) {}
+        } catch (e) { }
     },
 
     // ── Activity Logging ──
@@ -626,14 +626,14 @@ var EstatoStorage = {
 
         try {
             await db.ref('activities/' + activity.id).set(activity);
-        } catch(e) {}
+        } catch (e) { }
     },
 
     getStats() {
         const properties = this.getProperties();
         const user = this.getCurrentUser();
         if (!user) return { totalProperties: 0, totalCities: 0, forSale: 0, forRent: 0, totalValue: 0, avgPriceByCity: {}, typeDistribution: {} };
-        
+
         const filtered = user.role === 'Admin' ? properties : properties.filter(p => p.ownerId === user.id);
         const stats = { totalProperties: filtered.length, totalValue: 0, forSale: 0, forRent: 0, cityData: {}, typeDistribution: { 'Sale': 0, 'Rent': 0 } };
 
@@ -686,7 +686,7 @@ var EstatoStorage = {
         try {
             await db.ref('reviews/' + review.id).set(review);
             if (_syncCallback) _syncCallback('synced');
-        } catch(e) {
+        } catch (e) {
             if (_syncCallback) _syncCallback('error');
         }
         return review;
@@ -702,7 +702,7 @@ var EstatoStorage = {
     // ── Recently Viewed (LocalStorage Only) ──
     getRecentViews(userId) {
         if (!userId) return [];
-        try { return JSON.parse(localStorage.getItem(`estato_recent_v1_${userId}`) || '[]'); } catch(e) { return []; }
+        try { return JSON.parse(localStorage.getItem(`estato_recent_v1_${userId}`) || '[]'); } catch (e) { return []; }
     },
 
     addRecentView(userId, propertyId) {
@@ -712,7 +712,7 @@ var EstatoStorage = {
             const filtered = current.filter(id => id !== propertyId);
             const updated = [propertyId, ...filtered].slice(0, 10);
             localStorage.setItem(`estato_recent_v1_${userId}`, JSON.stringify(updated));
-        } catch(e) {}
+        } catch (e) { }
     },
 
     // ── Google Drive Sync ──
@@ -759,7 +759,7 @@ var EstatoStorage = {
             }
 
             const data = await metaRes.json();
-            
+
             // STEP 3: Permissions Update (Public Reader)
             await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
                 method: 'POST',
@@ -773,7 +773,7 @@ var EstatoStorage = {
                 })
             });
 
-            // Use the Thumbnail API for direct browser visibility (sz=w1000 for high quality)
+            // Use the Google Drive thumbnail API for direct, guaranteed image rendering in DOM <img> tags
             return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
 
         } catch (e) {

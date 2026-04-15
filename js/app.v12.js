@@ -530,9 +530,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         if(openAddModalBtn) openAddModalBtn.addEventListener('click', () => openModal());
-        if(mobileAddBtn) mobileAddBtn.addEventListener('click', () => openModal());
         if(closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
-        if(cancelModalBtn) cancelModalBtn.addEventListener('click', closeModal);
+        if(cancelModalBtn) cancelModalBtn.addEventListener('click', () => {
+            propertyForm.reset();
+            propImageFile.value = '';
+            imagePreviewContainer.style.display = 'none';
+            document.getElementById('propId').value = '';
+            document.getElementById('propImage').value = '';
+            closeModal();
+        });
 
         // V11 View Toggles (Using Event Delegation for robust toggle)
         document.body.addEventListener('click', (e) => {
@@ -775,7 +781,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         propertyModal.addEventListener('click', (e) => {
-            if (e.target === propertyModal) closeModal();
+            // Disabled closing on outside click to prevent accidental form wiping
         });
 
         propertyForm.addEventListener('submit', handleFormSubmit);
@@ -802,27 +808,64 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        const dropzone = propImageFile.closest('label');
+        if (dropzone) {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropzone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+            });
+            dropzone.addEventListener('dragover', () => {
+                dropzone.querySelector('div').style.borderColor = 'var(--primary)';
+                dropzone.querySelector('div').style.background = 'var(--bg-active, rgba(234, 88, 12, 0.05))';
+            });
+            dropzone.addEventListener('dragleave', () => {
+                dropzone.querySelector('div').style.borderColor = 'var(--border-color)';
+                dropzone.querySelector('div').style.background = 'var(--bg-hover)';
+            });
+            dropzone.addEventListener('drop', (e) => {
+                dropzone.querySelector('div').style.borderColor = 'var(--border-color)';
+                dropzone.querySelector('div').style.background = 'var(--bg-hover)';
+                if (e.dataTransfer && e.dataTransfer.files.length) {
+                    propImageFile.files = e.dataTransfer.files;
+                    propImageFile.dispatchEvent(new Event('change'));
+                }
+            });
+        }
+
         propImageFile.addEventListener('change', async (e) => {
             const files = Array.from(e.target.files).slice(0, 5); // Max 5 images
             if (files.length > 0) {
-                imagePreviewContainer.innerHTML = '<div style="padding:1rem; width:100%; text-align:center; color:var(--text-muted);"><i class="ph ph-spinner ph-spin"></i> Uploading to Google Drive...</div>';
+                // Instantly show local previews for a snappy user experience
+                imagePreviewContainer.innerHTML = '';
                 imagePreviewContainer.style.display = 'flex';
-                const linksArray = [];
                 
+                files.forEach(file => {
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(file);
+                    Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px', opacity: '0.6', filter: 'grayscale(50%)' });
+                    imagePreviewContainer.appendChild(img);
+                });
+
+                // Indicate uploading state safely
+                const submitBtn = propertyForm.querySelector('[type="submit"]');
+                if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Uploading Photos...'; }
+
+                const linksArray = [];
                 try {
                     for(let file of files) {
                         const link = await EstatoStorage.uploadImageToDrive(file);
                         linksArray.push(link);
                     }
                     
+                    // Replace local previews with the permanent Drive links
                     imagePreviewContainer.innerHTML = '';
                     for(let link of linksArray) {
                         const img = document.createElement('img');
                         img.src = link;
-                        Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px' });
+                        Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px', border: '2px solid var(--primary-light)' });
                         imagePreviewContainer.appendChild(img);
                     }
                     propImageHidden.value = JSON.stringify(linksArray);
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
                 } catch(error) {
                     let msg = error.message;
                     if (msg.includes('token') || msg.includes('Google Drive access')) {
@@ -830,6 +873,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     imagePreviewContainer.innerHTML = `<div style="padding:1rem; color:var(--danger); text-align:center; width:100%; border-radius:8px; background: rgba(220, 38, 38, 0.05); border: 1px solid rgba(220, 38, 38, 0.2);">${msg}</div>`;
                     propImageHidden.value = '';
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
                 }
             } else {
                 imagePreviewContainer.style.display = 'none';
@@ -1851,8 +1895,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderMessages() {
         let inquiries = EstatoStorage.getInquiries();
         
-        // Admin sees all, Seller sees own
-        if (currentUser.role === 'Seller') {
+        // Security: Prevent Admins from arbitrarily reading direct buyer-seller messages.
+        // Both Sellers and Admins only read inquiries bound to properties they explicitly own.
+        if (currentUser.role !== 'Buyer') {
             inquiries = inquiries.filter(inq => inq.ownerId === currentUser.id);
         }
         
@@ -1899,7 +1944,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <button class="btn btn-icon shadow-hover open-reply-btn" data-id="${inq.id}" title="Reply in Chat" style="background: var(--primary-light); color: var(--primary); display: inline-flex; align-items: center; justify-content: center;">
                                 <i class="ph ph-chat-text"></i>
                             </button>
-                            <button class="btn btn-icon btn-danger-soft delete-inq-btn shadow-hover" data-id="${inq.id}" title="Archive Inquiry">
+                            <button class="btn btn-icon btn-danger-soft delete-inq-btn shadow-hover" data-id="${inq.id}" title="Delete Inquiry">
                                 <i class="ph ph-trash"></i>
                             </button>
                         </div>
@@ -1931,7 +1976,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const btn = e.currentTarget;
                 btn.disabled = true;
                 btn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i>';
-                showConfirm('Archive this inquiry? This cannot be undone.', () => {
+                showConfirm('Delete this inquiry? This cannot be undone.', () => {
                     EstatoStorage.deleteInquiry(inqId);
                     renderMessages();
                 }, () => {
@@ -1988,7 +2033,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const isFav = favs.includes(prop.id);
         const mapHref = `https://maps.google.com/?q=${encodeURIComponent(prop.address + ', ' + prop.city)}`;
         
-        const images = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const images = rawImgArray.map(url => url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0]);
             
         // RBAC Context Rendering: Seller sees own, Admin sees all
         const role = currentUser ? currentUser.role : 'Buyer';
@@ -2030,7 +2076,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <i class="ph ph-scales"></i>
                     </button>
                     <button class="fav-float-btn fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}" title="Save to My Properties">
-                        <i class="ph ${isFav ? 'ph-heart-fill' : 'ph-heart'}"></i>
+                        <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
                     </button>
                 </div>
                 <div class="card-content">
@@ -2655,7 +2701,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('detailsLocation').innerHTML = `<i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}`;
         
         // Images
-        const images = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const images = rawImgArray.map(url => url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0]);
         const imgHtml = `
             <div style="position:relative; width:100%; height:300px; display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:0.5rem; padding-bottom: 0.5rem;">
                 ${images.map(img => `<img src="${img}" style="height:100%; min-width:100%; object-fit:cover; scroll-snap-align:start; border-radius:var(--radius-md);">`).join('')}
@@ -2735,7 +2782,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             btnHtml = `
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
-                    <i class="ph ${isFav ? 'ph-heart-fill' : 'ph-heart'}"></i>
+                    <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
                 </button>
                 <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${escapeHtml(prop.title)}" style="gap:0.5rem;"><i class="ph ph-envelope-simple"></i> Contact Seller</button>
             `;
@@ -2888,10 +2935,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Modal Logic ---
     function openModal(property = null) {
-        propertyForm.reset();
-        propImageFile.value = '';
-        imagePreviewContainer.style.display = 'none';
-        propImageHidden.value = '';
+        if (property) {
+            // Editing: always reset to the loaded property
+            propertyForm.reset();
+            propImageFile.value = '';
+            imagePreviewContainer.style.display = 'none';
+            propImageHidden.value = '';
+        } else {
+            // Adding: Only reset if the OLD form was editing a specific property
+            if (document.getElementById('propId').value !== '') {
+                propertyForm.reset();
+                propImageFile.value = '';
+                imagePreviewContainer.style.display = 'none';
+                propImageHidden.value = '';
+                document.getElementById('propId').value = '';
+            }
+            // If propId is blank, we leave the fields intact intentionally so they don't vanish!
+        }
 
         // Populate dynamic dropdowns from FILTER_CONFIG
         const populateSelect = (id, options, selectedValue) => {
@@ -2966,7 +3026,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function closeModal() {
         propertyModal.classList.remove('active');
-        propertyForm.reset();
+        // REMOVED propertyForm.reset() so half-filled forms don't vanish!
         // Clean up modal marker so next openModal() starts fresh
         // (the map instance is reused, but the marker state must reset)
         if (modalMarker && modalMap) {
@@ -3028,6 +3088,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 await EstatoStorage.addProperty(newProperty);
                 showToast(currentUser && currentUser.role === 'Admin' ? 'Listing published!' : 'Listing submitted for review!', 'success');
             }
+            propertyForm.reset();
             closeModal();
             populateCitiesDatalist();
             setActiveNav('properties');
@@ -3167,7 +3228,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         // Use images[] array first (new format), fall back to legacy prop.image
-        const imgUrl = (prop.images && prop.images.length > 0) ? prop.images[0] : (prop.image && prop.image.length > 10 ? prop.image : '');
+        let imgUrl = (prop.images && prop.images.length > 0) ? prop.images[0] : (prop.image && prop.image.length > 10 ? prop.image : '');
+        if (imgUrl) imgUrl = imgUrl.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0];
 
         flyerDiv.innerHTML = `
             <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #ea580c; padding-bottom: 20px;">

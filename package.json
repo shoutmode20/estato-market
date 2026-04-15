@@ -3,9 +3,19 @@
   "version": "12.1.0",
   "description": "Estato — Premium Real Estate Marketplace powered by Firebase",
   "scripts": {
-    "start": "npx serve . --listen 3000",
-    "dev": "npx serve . --listen 3000"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
-  "keywords": ["real-estate", "firebase", "pwa"],
-  "license": "MIT"
+  "keywords": [
+    "real-estate",
+    "firebase",
+    "pwa"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^13.8.0"
+  }
 }

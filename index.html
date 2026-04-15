@@ -138,11 +138,7 @@
                     <input type="text" id="searchInput" placeholder="Search by city, title or address...">
                 </div>
                 
-                <!-- View Toggle V11 -->
-                <div class="view-toggle-pills" style="display: flex; background: var(--bg-main); padding: 0.25rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-left: 1rem;">
-                    <button class="toggle-pill active" id="viewGridBtn" title="Grid View" style="border:none; background:none; padding: 0.25rem 0.5rem; cursor:pointer;"><i class="ph ph-grid-four"></i></button>
-                    <button class="toggle-pill" id="viewMapBtn" title="Map View" style="border:none; background:none; padding: 0.25rem 0.5rem; cursor:pointer;"><i class="ph ph-map-trifold"></i></button>
-                </div>
+                <!-- View Toggle V11 (Removed as requested) -->
                 <div class="user-profile">
                     <div class="notification-container" style="position: relative; margin-right: 1.5rem;">
                         <div id="notificationBell" class="notification-bell" title="Notifications">
@@ -174,11 +170,6 @@
 
             <!-- Comparison UI moved to bottom of body for better z-indexing -->
             
-            <!-- Mobile Specific Floating Action Button (Owners only) -->
-            <button class="mobile-fab admin-only" id="mobileAddBtn">
-                <i class="ph ph-plus"></i>
-            </button>
-            
         </main>
     </div>
 
@@ -196,7 +187,14 @@
                     
                     <div class="image-upload-area" style="margin-bottom: 1.5rem;">
                         <label>Property Photos (Max 5)</label>
-                        <input type="file" id="propImageFile" accept="image/*" multiple class="w-full">
+                        <label style="position: relative; margin-top: 0.5rem; display: block; cursor: pointer;">
+                            <input type="file" id="propImageFile" accept="image/*" multiple style="display: none;">
+                            <div style="border: 2px dashed var(--border-color); border-radius: var(--radius-sm); padding: 1.5rem; text-align: center; background: var(--bg-hover); color: var(--text-muted); transition: all 0.2s;">
+                                <i class="ph-duotone ph-upload-simple" style="font-size: 2rem; color: var(--primary); margin-bottom: 0.5rem;"></i>
+                                <div style="font-weight: 500; color: var(--text-main);">Click or Drag photos here</div>
+                                <div style="font-size: 0.8rem;">Supports JPG, PNG (Max 5MB each)</div>
+                            </div>
+                        </label>
                         <div id="imagePreviewContainer" style="display: none; margin-top: 1rem; border-radius: var(--radius-sm); overflow-x: auto; white-space: nowrap; height: 100px; gap: 10px; padding: 0.5rem; background: var(--bg-hover);">
                             <!-- Previews injected here -->
                         </div>
@@ -502,8 +500,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <script src="./js/config.js"></script>
-    <script src="./js/storage.js?v=12.6"></script>
-    <script src="./js/app.v12.js?v=12.6"></script>
+    <script src="./js/storage.js?v=12.7"></script>
+    <script src="./js/app.v12.js?v=12.7"></script>
     <!-- PWA Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {
