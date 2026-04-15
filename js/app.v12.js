@@ -838,54 +838,79 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        propImageFile.addEventListener('change', async (e) => {
-            const files = Array.from(e.target.files).slice(0, 5); // Max 5 images
-            if (files.length > 0) {
-                // Instantly show local previews for a snappy user experience
-                imagePreviewContainer.innerHTML = '';
-                imagePreviewContainer.style.display = 'flex';
-                
-                files.forEach(file => {
-                    const img = document.createElement('img');
-                    img.src = URL.createObjectURL(file);
-                    Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px', opacity: '0.6', filter: 'grayscale(50%)' });
-                    imagePreviewContainer.appendChild(img);
-                });
-
-                // Indicate uploading state safely
-                const submitBtn = propertyForm.querySelector('[type="submit"]');
-                if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Uploading Photos...'; }
-
-                const linksArray = [];
-                try {
-                    for(let file of files) {
-                        const link = await compressImage(file, 1000, 0.7);
-                        linksArray.push(link);
-                    }
-                    
-                    // Replace local previews with the permanent Base64 links
-                    imagePreviewContainer.innerHTML = '';
-                    for(let link of linksArray) {
-                        const img = document.createElement('img');
-                        img.src = link;
-                        Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px', border: '2px solid var(--primary-light)' });
-                        imagePreviewContainer.appendChild(img);
-                    }
-                    propImageHidden.value = JSON.stringify(linksArray);
-                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
-                } catch(error) {
-                    let msg = error.message;
-                    if (msg.includes('token') || msg.includes('Google Drive access')) {
-                        msg = `<i class="ph ph-lock-key"></i> Drive access expired. <a href="#" onclick="window.reauthorizeDrive(); return false;" style="color:var(--primary); text-decoration:underline; font-weight:bold;">Re-authorize now</a>`;
-                    }
-                    imagePreviewContainer.innerHTML = `<div style="padding:1rem; color:var(--danger); text-align:center; width:100%; border-radius:8px; background: rgba(220, 38, 38, 0.05); border: 1px solid rgba(220, 38, 38, 0.2);">${msg}</div>`;
-                    propImageHidden.value = '';
-                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
-                }
-            } else {
+        window.renderImagePreviews = function() {
+            let links = [];
+            try { if (propImageHidden.value) links = JSON.parse(propImageHidden.value); } catch(e) {}
+            
+            imagePreviewContainer.innerHTML = '';
+            if (links.length === 0) {
                 imagePreviewContainer.style.display = 'none';
-                propImageHidden.value = '';
+                return;
             }
+            
+            imagePreviewContainer.style.display = 'flex';
+            links.forEach((link, index) => {
+                const wrapper = document.createElement('div');
+                Object.assign(wrapper.style, { position: 'relative', display: 'inline-block', flexShrink: '0', height: '100px', width: '120px' });
+                
+                const img = document.createElement('img');
+                img.src = window.formatEstatoImage(link);
+                img.onerror = function() { this.src = window.ESTATO_DEFAULT_IMG; };
+                Object.assign(img.style, { height: '100%', width: '100%', objectFit: 'cover', borderRadius: '4px', border: '2px solid var(--border-color)' });
+                
+                const closeBtn = document.createElement('button');
+                closeBtn.innerHTML = '<i class="ph ph-x"></i>';
+                Object.assign(closeBtn.style, {
+                    position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.6)', color: '#fff', 
+                    border: 'none', borderRadius: '50%', width: '24px', height: '24px', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', zIndex: '10'
+                });
+                
+                closeBtn.onclick = (ev) => {
+                    ev.preventDefault();
+                    links.splice(index, 1);
+                    propImageHidden.value = JSON.stringify(links);
+                    window.renderImagePreviews();
+                };
+                
+                wrapper.appendChild(img);
+                wrapper.appendChild(closeBtn);
+                imagePreviewContainer.appendChild(wrapper);
+            });
+        };
+
+        propImageFile.addEventListener('change', async (e) => {
+            let existingLinks = [];
+            try { if (propImageHidden.value) existingLinks = JSON.parse(propImageHidden.value); } catch(e) {}
+            
+            const maxAllowed = 5 - existingLinks.length;
+            if (maxAllowed <= 0) {
+                showToast('Max 5 images allowed.', 'warning');
+                e.target.value = '';
+                return;
+            }
+            
+            const files = Array.from(e.target.files).slice(0, maxAllowed);
+            if (files.length === 0) return;
+            
+            const submitBtn = propertyForm.querySelector('[type="submit"]');
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Processing...'; }
+            
+            try {
+                for(let file of files) {
+                    const link = await compressImage(file, 1000, 0.7);
+                    existingLinks.push(link);
+                }
+                propImageHidden.value = JSON.stringify(existingLinks);
+                window.renderImagePreviews();
+                
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
+            } catch(error) {
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
+                showToast('Failed to process image. Details: ' + error.message, 'danger');
+            }
+            
+            propImageFile.value = '';
         });
 
         // ── Location: Use My GPS Position ──
@@ -2993,18 +3018,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('propDescription').value = property.description || '';
             
             const imgs = property.images && property.images.length > 0 ? property.images : (property.image ? [property.image] : []);
-            if (imgs.length > 0) {
-                propImageHidden.value = JSON.stringify(imgs);
-                imagePreviewContainer.innerHTML = '';
-                imagePreviewContainer.style.display = 'flex';
-                imgs.forEach(imgData => {
-                    const img = document.createElement('img');
-                    img.src = window.formatEstatoImage(imgData);
-                    img.onerror = function() { this.src = window.ESTATO_DEFAULT_IMG; };
-                    Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px' });
-                    imagePreviewContainer.appendChild(img);
-                });
-            }
+            propImageHidden.value = imgs.length > 0 ? JSON.stringify(imgs) : '';
+            if (window.renderImagePreviews) window.renderImagePreviews();
 
             // Restore location fields
             document.getElementById('propPinCode').value = property.pinCode || '';
