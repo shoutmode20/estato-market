@@ -859,11 +859,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const linksArray = [];
                 try {
                     for(let file of files) {
-                        const link = await EstatoStorage.uploadImageToDrive(file);
+                        const link = await compressImage(file, 1000, 0.7);
                         linksArray.push(link);
                     }
                     
-                    // Replace local previews with the permanent Drive links
+                    // Replace local previews with the permanent Base64 links
                     imagePreviewContainer.innerHTML = '';
                     for(let link of linksArray) {
                         const img = document.createElement('img');
