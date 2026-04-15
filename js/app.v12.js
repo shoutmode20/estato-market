@@ -12,6 +12,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentStatusFilter = '';
     let currentCategoryFilter = '';
 
+    window.formatEstatoImage = function(url) {
+        if (!url || typeof url !== 'string') return url || '';
+        return url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0];
+    };
+
+    window.ESTATO_DEFAULT_IMG = 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop';
+
     let dashboardCharts = [];
 
     // V11 States
@@ -2034,7 +2041,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const mapHref = `https://maps.google.com/?q=${encodeURIComponent(prop.address + ', ' + prop.city)}`;
         
         const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
-        const images = rawImgArray.map(url => url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0]);
+        const images = rawImgArray.map(url => window.formatEstatoImage(url));
             
         // RBAC Context Rendering: Seller sees own, Admin sees all
         const role = currentUser ? currentUser.role : 'Buyer';
@@ -2043,7 +2050,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const carouselHTML = `
             <div class="image-carousel">
-                ${images.map(img => `<div class="carousel-slide"><img src="${img}" alt="${prop.title}" loading="lazy"></div>`).join('')}
+                ${images.map(img => `<div class="carousel-slide"><img src="${img}" alt="${prop.title}" loading="lazy" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;"></div>`).join('')}
             </div>
             ${images.length > 1 ? `
                 <div class="carousel-indicators">
@@ -2143,7 +2150,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${properties.map(p => `
                     <div style="min-width: 200px; max-width: 200px; flex-shrink: 0; scroll-snap-align: start;">
                         <div class="surface-panel shadow-hover" style="border-radius: var(--radius-md); overflow: hidden; height: 100%; cursor: pointer; border: 1px solid var(--border-color);" onclick="window.dispatchCardClick('${p.id}')">
-                            <img src="${(p.images && p.images.length > 0) ? p.images[0] : (p.image || 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=400&auto=format&fit=crop')}" style="width: 100%; height: 100px; object-fit: cover;">
+                            <img src="${window.formatEstatoImage((p.images && p.images.length > 0) ? p.images[0] : (p.image || window.ESTATO_DEFAULT_IMG))}" style="width: 100%; height: 100px; object-fit: cover;" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">
                             <div style="padding: 0.75rem 0.5rem;">
                                 <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-main); margin-bottom: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.title}</div>
                                 <div style="font-size: 0.8rem; color: var(--primary); font-weight: 700;">${currencyFormatter.format(p.price)}</div>
@@ -2510,10 +2517,10 @@ document.addEventListener('DOMContentLoaded', () => {
             });
  
             const marker = L.marker([lat, lng], { icon });
-            const firstImg = (p.images && p.images.length > 0) ? p.images[0] : (p.image || '');
+            const firstImg = window.formatEstatoImage((p.images && p.images.length > 0) ? p.images[0] : (p.image || ''));
             const popupContent = `
                 <div style="width: 200px; font-family: 'Outfit';">
-                    ${firstImg ? `<img src="${firstImg}" style="width:100%; height:100px; object-fit:cover; border-radius:8px; margin-bottom:8px;">` : ''}
+                    ${firstImg ? `<img src="${firstImg}" style="width:100%; height:100px; object-fit:cover; border-radius:8px; margin-bottom:8px;" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">` : ''}
                     <h4 style="margin:0; font-size:1rem;">${p.title}</h4>
                     <p style="margin:4px 0; color:var(--primary); font-weight:700;">${currencyFormatter.format(p.price)}</p>
                     <button class="btn btn-primary btn-sm w-full" style="margin-top:8px;" onclick="window.dispatchCardClick('${p.id}')">View Details</button>
@@ -2621,10 +2628,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let html = `<div class="comparison-table-wrapper"><table class="comparison-table"><thead><tr><th>Feature</th>`;
         
         compareList.forEach(p => {
-            const firstImg = (p.images && p.images.length > 0) ? p.images[0] : (p.image || '');
+            const firstImg = window.formatEstatoImage((p.images && p.images.length > 0) ? p.images[0] : (p.image || ''));
             html += `
                 <th class="prop-header">
-                    ${firstImg ? `<img src="${firstImg}">` : ''}
+                    ${firstImg ? `<img src="${firstImg}" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">` : ''}
                     <div style="font-weight:700; margin-top: 5px;">${p.title}</div>
                 </th>
             `;
@@ -2702,10 +2709,10 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Images
         const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
-        const images = rawImgArray.map(url => url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0]);
+        const images = rawImgArray.map(url => window.formatEstatoImage(url));
         const imgHtml = `
             <div style="position:relative; width:100%; height:300px; display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:0.5rem; padding-bottom: 0.5rem;">
-                ${images.map(img => `<img src="${img}" style="height:100%; min-width:100%; object-fit:cover; scroll-snap-align:start; border-radius:var(--radius-md);">`).join('')}
+                ${images.map(img => `<img src="${img}" style="height:100%; min-width:100%; object-fit:cover; scroll-snap-align:start; border-radius:var(--radius-md);" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">`).join('')}
             </div>
         `;
         document.getElementById('detailsImageCarousel').innerHTML = imgHtml;
@@ -2776,9 +2783,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let btnHtml = '';
         if (isOwnerOfListing) {
-            btnHtml = `
-                <button class="btn btn-secondary shadow-hover" onclick="document.getElementById('propertyDetailsModal').classList.remove('active'); window.openModal(EstatoStorage.getPropertyById('${prop.id}'))" style="gap:0.5rem;"><i class="ph ph-pencil-simple"></i> Edit Details</button>
-            `;
+            btnHtml = ``;
         } else {
             btnHtml = `
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
@@ -2994,7 +2999,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 imagePreviewContainer.style.display = 'flex';
                 imgs.forEach(imgData => {
                     const img = document.createElement('img');
-                    img.src = imgData;
+                    img.src = window.formatEstatoImage(imgData);
+                    img.onerror = function() { this.src = window.ESTATO_DEFAULT_IMG; };
                     Object.assign(img.style, { height: '100%', width: '120px', objectFit: 'cover', borderRadius: '4px' });
                     imagePreviewContainer.appendChild(img);
                 });
@@ -3237,7 +3243,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ESTATO <span style="color: #7d746d; font-weight: 300;">| PREMIUM LISTING</span>
                 </h1>
             </div>
-            ${imgUrl ? `<img src="${imgUrl}" style="width: 100%; height: 450px; object-fit: cover; border-radius: 16px; margin-bottom: 30px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);">` : ''}
+            ${imgUrl ? `<img src="${imgUrl}" style="width: 100%; height: 450px; object-fit: cover; border-radius: 16px; margin-bottom: 30px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">` : ''}
             
             <h2 style="font-size: 42px; margin: 0 0 10px 0; font-weight: 700;">${prop.title}</h2>
             <h3 style="color: #7d746d; font-size: 26px; margin: 0 0 30px 0; font-weight: 400;">${prop.address}, ${prop.city}</h3>
