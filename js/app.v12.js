@@ -1343,10 +1343,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="surface-panel" style="padding: 1.5rem; display: flex; align-items: center; justify-content: space-between; border: 1px dashed var(--border-color); background: var(--bg-hover); margin-bottom: 1rem;">
                     <div>
                         <h4 style="margin: 0 0 5px 0;">Property Data Generator</h4>
-                        <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">Instantly seed 10 realistic, high-quality property listings for testing.</p>
+                        <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">Instantly seed 1 realistic, high-quality property listing for testing.</p>
                     </div>
                     <button class="btn btn-secondary shadow-hover" id="seedDataBtn" style="background: white; border: 1px solid var(--border-color);">
-                        <i class="ph ph-database"></i> Seed 10 Properties
+                        <i class="ph ph-database"></i> Seed 1 Property
                     </button>
                 </div>
 
@@ -1377,7 +1377,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Admin Tools listener
         const seedBtnDashboard = document.getElementById('seedDataBtn');
-        if (seedBtnDashboard) seedBtnDashboard.addEventListener('click', () => seedDummyData(10));
+        if (seedBtnDashboard) seedBtnDashboard.addEventListener('click', () => seedDummyData(1));
 
         const backupBtn = document.getElementById('backupDataBtn');
         if (backupBtn) backupBtn.addEventListener('click', () => exportBackup());
@@ -1491,7 +1491,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Admin Tools Listeners
         const seedBtn = document.getElementById('seedDataBtn');
         if (seedBtn) {
-            seedBtn.addEventListener('click', () => seedDummyData(10));
+            seedBtn.addEventListener('click', () => seedDummyData(1));
         }
     }
 
