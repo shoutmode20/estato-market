@@ -2749,6 +2749,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-bed" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Layout:</strong> ${prop.bhk || 'N/A'}</div>
             <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-ruler" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Area:</strong> ${prop.area ? prop.area.toLocaleString() + ' sq.ft' : 'N/A'}</div>
             <div style="display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-info" style="color:var(--primary); font-size:1.2rem;"></i> <strong>Status:</strong> ${prop.status}</div>
+            ${prop.address ? `<div style="display:flex; align-items:flex-start; gap:0.5rem; grid-column: 1 / -1;"><i class="ph-duotone ph-map-pin" style="color:var(--primary); font-size:1.2rem; margin-top:2px; flex-shrink:0;"></i> <span><strong>Address:</strong> ${escapeHtml(prop.address)}${prop.pinCode ? ` &mdash; <span style="font-family:monospace; background:var(--bg-hover); padding:1px 6px; border-radius:4px; font-size:0.85rem;">${escapeHtml(prop.pinCode)}</span>` : ''}</span></div>` : ''}
         `;
 
         // Lister
