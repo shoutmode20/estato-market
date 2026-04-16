@@ -303,6 +303,9 @@ var EstatoStorage = {
         if (_syncCallback) _syncCallback('syncing');
         property.id = 'prop_' + Date.now();
         property.ownerId = _memCache.currentUser.id;
+        property.ownerName = _memCache.currentUser.name || 'Estato User';
+        property.ownerPicture = _memCache.currentUser.picture || null;
+        property.listedAt = new Date().toISOString();
         property.priceHistory = [{ price: property.price, date: new Date().toISOString() }];
 
         // Enforce Pending status for new listings (Fraud Prevention)
@@ -346,7 +349,7 @@ var EstatoStorage = {
 
             // Optimistic update — snapshot for rollback if Firebase write fails
             const _updateBackup = { ...prop, priceHistory: prop.priceHistory ? [...prop.priceHistory] : [] };
-            _memCache.properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId };
+            _memCache.properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId, ownerName: prop.ownerName, ownerPicture: prop.ownerPicture, listedAt: prop.listedAt, updatedAt: new Date().toISOString() };
 
             try {
                 await db.ref('properties/' + updatedProp.id).update(_memCache.properties[index]);

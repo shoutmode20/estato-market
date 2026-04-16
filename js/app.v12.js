@@ -2753,12 +2753,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Lister
         const ownerName = prop.ownerName || 'Estato User';
+        const ownerPicture = prop.ownerPicture || null;
+        const listedAt = prop.listedAt ? new Date(prop.listedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+        const updatedAt = prop.updatedAt ? new Date(prop.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+        const avatarHtml = ownerPicture
+            ? `<img src="${ownerPicture}" alt="${escapeHtml(ownerName)}" style="width:48px; height:48px; border-radius:50%; object-fit:cover; border: 2px solid var(--primary-light);" onerror="this.onerror=null;this.style.display='none';this.nextElementSibling.style.display='flex';">
+               <div class="avatar" style="display:none;width:48px; height:48px; background:var(--primary-light); color:var(--primary); align-items:center; justify-content:center; border-radius:50%; font-weight:bold; font-size: 1.3rem; flex-shrink:0;">${ownerName.charAt(0).toUpperCase()}</div>`
+            : `<div class="avatar" style="width:48px; height:48px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; border-radius:50%; font-weight:bold; font-size: 1.3rem; flex-shrink:0;">${ownerName.charAt(0).toUpperCase()}</div>`;
         document.getElementById('detailsLister').innerHTML = `
             <div style="display:flex; align-items:center; gap:1rem;">
-                <div class="avatar" style="width:40px; height:40px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; border-radius:50%; font-weight:bold; font-size: 1.2rem;">${ownerName.charAt(0)}</div>
-                <div>
-                    <h5 style="margin:0; font-size:1rem; color:var(--text-main);">${escapeHtml(ownerName)}</h5>
-                    <p style="margin:0; font-size:0.85rem; color:var(--text-muted);"><i class="ph-fill ph-seal-check" style="color:var(--primary);"></i> Verified Seller</p>
+                <div style="flex-shrink:0; position:relative;">${avatarHtml}</div>
+                <div style="min-width:0;">
+                    <h5 style="margin:0 0 2px 0; font-size:1rem; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(ownerName)}</h5>
+                    ${listedAt ? `<p style="margin:0; font-size:0.78rem; color:var(--text-muted);"><i class="ph ph-calendar-blank" style="margin-right:3px;"></i>Listed ${listedAt}</p>` : ''}
+                    ${updatedAt ? `<p style="margin:2px 0 0 0; font-size:0.78rem; color:var(--text-muted);"><i class="ph ph-pencil-simple" style="margin-right:3px; color:var(--primary);"></i>Last updated ${updatedAt}</p>` : ''}
                 </div>
             </div>
         `;
