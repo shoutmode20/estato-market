@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Estato V12.1 — The definitive premium real estate marketplace. Real-time listings, proximity search, and seamless secure property management.">
     <meta property="og:title" content="Estato V12.1 | Premium Real Estate Marketplace">
     <meta property="og:description" content="The next generation of real estate discovery. Secure, real-time, and mobile-first.">
@@ -202,12 +202,12 @@
 
                     <div class="form-group">
                         <label>Listing Title</label>
-                        <input type="text" id="propTitle" required placeholder="e.g. Luxury Sea-facing Penthouse">
+                        <input type="text" id="propTitle" required placeholder="e.g. Luxury Sea-facing Penthouse" maxlength="100">
                     </div>
 
                     <div class="form-group">
                         <label>Project / Society Name</label>
-                        <input type="text" id="propProjectName" placeholder="e.g. Mantri Serenity or Hiranandani Estate">
+                        <input type="text" id="propProjectName" placeholder="e.g. Mantri Serenity or Hiranandani Estate" maxlength="100">
                     </div>
                     
                     <div class="form-row">
@@ -254,7 +254,7 @@
                     <div class="form-row">
                         <div class="form-group half">
                             <label>Full Address</label>
-                            <input type="text" id="propAddress" required placeholder="e.g. 10 Marine Drive">
+                            <input type="text" id="propAddress" required placeholder="e.g. 10 Marine Drive" maxlength="200">
                         </div>
                         <div class="form-group half">
                             <label>Area PIN Code <span style="color: var(--danger); font-size: 0.8rem;">*required</span></label>
@@ -293,7 +293,7 @@
 
                     <div class="form-group">
                         <label>Property Description & Keywords</label>
-                        <textarea id="propDescription" rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention amenities (Pool, Gym), nearby landmarks, or special features for better search discovery..."></textarea>
+                        <textarea id="propDescription" rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention amenities (Pool, Gym), nearby landmarks, or special features for better search discovery..." maxlength="2000"></textarea>
                     </div>
 
                     <div class="modal-footer">

@@ -26,15 +26,19 @@ document.addEventListener('DOMContentLoaded', () => {
     let mapLayerGroup = null;
     let markers = [];
     let isMapVisible = false;
-    let compareList = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]')
-                        .map(id => EstatoStorage.getPropertyById(id))
-                        .filter(p => p); 
+    // compareList is intentionally empty at parse time — properties aren't in memory yet.
+    // It is restored from localStorage on the first successful data load inside the subscribe callback.
+    let compareList = [];
+    let _compareRestored = false; // One-shot guard so restore runs only once per session
     let modalMap = null;
     let modalMarker = null;
 
     // Radius Search States
     let currentRadiusCenter = null; // {lat, lng}
     let currentRadiusKm = 10;
+    // Holds computed km distances for the current render pass.
+    // Kept separate from property objects to prevent contaminating Firebase writes.
+    let _renderDistanceMap = new Map();
     
     // --- Utilities ---
     function debounce(func, wait) {
@@ -411,6 +415,19 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!storageSubscribed) {
                 storageSubscribed = true;
                 const _debouncedRender = debounce(() => {
+                    // One-time compare list restore — deferred until properties are actually loaded.
+                    // Cannot run at module parse time because the memory cache is empty then.
+                    if (!_compareRestored && EstatoStorage.getProperties().length > 0) {
+                        _compareRestored = true;
+                        const savedIds = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]');
+                        const restored = savedIds
+                            .map(id => EstatoStorage.getPropertyById(id))
+                            .filter(Boolean);
+                        if (restored.length > 0) {
+                            compareList = restored;
+                            updateCompareTray();
+                        }
+                    }
                     renderView(currentView, searchInput.value);
                     renderNotifications();
                     updateSeoMetadata();
@@ -431,19 +448,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log("Role Card Selected:", card.getAttribute('data-role'));
                 loginRoleCards.forEach(c => c.classList.remove('active'));
                 card.classList.add('active');
-                selectedRoleInput.value = card.getAttribute('data-role');
+                
+                const selected = card.getAttribute('data-role');
+                selectedRoleInput.value = selected;
             });
         });
 
         // Unified Google Login
         if (googleLoginBtn) {
             googleLoginBtn.addEventListener('click', async () => {
+                const role = selectedRoleInput.value;
+
                 console.log("Google Login Button Clicked!");
                 googleLoginBtn.disabled = true;
                 googleLoginBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Authenticating...';
 
                 try {
-                    const role = selectedRoleInput.value;
                     const success = await EstatoStorage.loginWithGoogle(role, false);
 
                     if (success) {
@@ -474,6 +494,12 @@ document.addEventListener('DOMContentLoaded', () => {
             adminElements.forEach(el => el.style.display = 'none');
         } else if (role === 'Seller' || role === 'Admin') {
             adminElements.forEach(el => el.style.display = '');
+        }
+
+        // Hide Messages specifically for Admin to enforce privacy boundaries
+        const msgNavNode = document.querySelector('li[data-view="messages"]');
+        if (msgNavNode) {
+            msgNavNode.style.display = (role === 'Admin') ? 'none' : 'flex';
         }
     }
 
@@ -702,20 +728,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (reviewForm) {
-            reviewForm.addEventListener('submit', (e) => {
+            reviewForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const propId = document.getElementById('revPropertyId').value;
                 const rating = revRating.value;
                 const comment = document.getElementById('revComment').value;
 
-                EstatoStorage.addReview(propId, rating, comment);
-                
-                // Refresh Modal
-                renderReviews(propId);
-                reviewForm.reset();
-                // Reset Stars to 5
-                starInput.querySelectorAll('i').forEach(s => { s.classList.add('ph-fill'); s.classList.remove('ph'); });
-                revRating.value = 5;
+                try {
+                    await EstatoStorage.addReview(propId, rating, comment);
+                    // Refresh the review list in the modal
+                    renderReviews(propId);
+                    reviewForm.reset();
+                    // Reset Stars to 5
+                    starInput.querySelectorAll('i').forEach(s => { s.classList.add('ph-fill'); s.classList.remove('ph'); });
+                    revRating.value = 5;
+                    showToast('Review submitted! Thank you.', 'success');
+                } catch (err) {
+                    showToast(err.message, 'warning');
+                }
             });
         }
 
@@ -918,7 +948,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (useMyLocationBtn) {
             useMyLocationBtn.addEventListener('click', () => {
                 if (!navigator.geolocation) {
-                    alert('Geolocation is not supported by your browser.');
+                    showToast('Geolocation is not supported by your browser.', 'warning');
                     return;
                 }
                 const origHtml = useMyLocationBtn.innerHTML;
@@ -937,7 +967,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }, 2000);
                     },
                     (err) => {
-                        alert('Unable to retrieve location: ' + err.message + '\n\nTip: Make sure you allow location permission for this page.');
+                        showToast('Unable to retrieve location: ' + err.message + ' — Ensure location permission is allowed for this page.', 'warning');
                         useMyLocationBtn.innerHTML = origHtml;
                         useMyLocationBtn.disabled = false;
                     },
@@ -1015,7 +1045,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 locSearchInput.style.borderColor = 'var(--danger)';
                 if (helpText) helpText.innerHTML = '<i class="ph ph-warning-circle" style="color:var(--danger)"></i><span style="color:var(--danger)">Link extraction failed. Please search the name instead.</span>';
                 if (query.includes('goo.gl')) {
-                    alert("Shortened links like 'goo.gl' hide the exact coordinates inside Google's systems.\n\nTo fix this:\nType the name of the place and click Search instead!");
+                    showToast("Shortened URLs (goo.gl) hide coordinates. Type the place name and click Search instead.", 'info');
                 }
                 return;
             }
@@ -1488,11 +1518,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }));
         }
 
-        // Admin Tools Listeners
-        const seedBtn = document.getElementById('seedDataBtn');
-        if (seedBtn) {
-            seedBtn.addEventListener('click', () => seedDummyData(1));
-        }
+        // Admin Tools Listeners are registered in renderDashboard() — no duplicate needed here.
     }
 
     function renderCities() {
@@ -1581,7 +1607,10 @@ document.addEventListener('DOMContentLoaded', () => {
  
         // Radius Filtering
         if (currentRadiusCenter) {
-            // Use a local Map keyed by property ID to avoid mutating the in-memory cache objects
+            // _renderDistanceMap holds km distances per property for this render pass.
+            // We intentionally do NOT write to the property object (p._distanceKm) because
+            // the same object lives in _memCache.properties and would contaminate Firebase writes.
+            _renderDistanceMap.clear();
             if (!renderProperties._distanceCache) renderProperties._distanceCache = new Map();
             const dCache = renderProperties._distanceCache;
             const cacheKey = `${currentRadiusCenter.lat},${currentRadiusCenter.lng}`;
@@ -1595,8 +1624,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!dCache.has(key)) {
                     dCache.set(key, getHaversineDistance(currentRadiusCenter.lat, currentRadiusCenter.lng, lat, lng));
                 }
-                p._distanceKm = dCache.get(key); // Ephemeral — only used this render pass
-                return p._distanceKm <= currentRadiusKm;
+                _renderDistanceMap.set(p.id, dCache.get(key)); // Isolated from cache object
+                return _renderDistanceMap.get(p.id) <= currentRadiusKm;
             });
         }
 
@@ -1604,24 +1633,25 @@ document.addEventListener('DOMContentLoaded', () => {
         properties = [...properties];
         if (currentRadiusCenter) {
             // Priority sort by proximity if radius active
-            properties.sort((a, b) => (a._distanceKm || 0) - (b._distanceKm || 0));
+            properties.sort((a, b) => (_renderDistanceMap.get(a.id) || 0) - (_renderDistanceMap.get(b.id) || 0));
         } else if (currentSort === 'price-low') {
             properties.sort((a, b) => a.price - b.price);
         } else if (currentSort === 'price-high') {
             properties.sort((a, b) => b.price - a.price);
         } else if (currentSort === 'oldest') {
-            // Oldest first - Sort by numeric part of ID ascending
+            // Oldest first — parse the timestamp portion of the ID as a Number to avoid
+            // localeCompare string collation bugs if the ID format ever changes.
             properties.sort((a, b) => {
-                const idA = a.id ? a.id.replace('prop_', '') : '0';
-                const idB = b.id ? b.id.replace('prop_', '') : '0';
-                return idA.localeCompare(idB); // Ascending
+                const idA = Number(a.id ? a.id.replace('prop_', '') : 0);
+                const idB = Number(b.id ? b.id.replace('prop_', '') : 0);
+                return idA - idB; // Ascending
             });
         } else {
-            // Newest first (default) - Sort by numeric part of ID descending
+            // Newest first (default)
             properties.sort((a, b) => {
-                const idA = a.id ? a.id.replace('prop_', '') : '0';
-                const idB = b.id ? b.id.replace('prop_', '') : '0';
-                return idB.localeCompare(idA); // Descending
+                const idA = Number(a.id ? a.id.replace('prop_', '') : 0);
+                const idB = Number(b.id ? b.id.replace('prop_', '') : 0);
+                return idB - idA; // Descending
             });
         }
 
@@ -1684,7 +1714,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (properties.length === 0) {
             html += `<div class="empty-state" style="grid-column: 1 / -1;"><i class="ph-duotone ph-magnifying-glass"></i><p>No properties found matching criteria.</p></div>`;
         } else {
-            html += properties.map((p, i) => generatePropertyCard(p, i, (currentRadiusCenter && typeof p._distanceKm === 'number') ? p._distanceKm : null)).join('');
+            html += properties.map((p, i) => generatePropertyCard(p, i, (currentRadiusCenter && _renderDistanceMap.has(p.id)) ? _renderDistanceMap.get(p.id) : null)).join('');
         }
 
         // Close the grid div
@@ -1894,9 +1924,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         changeRoleBtn.disabled = true;
                         changeRoleBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Switching...';
                         try {
-                            const db = firebase.database();
-                            await db.ref('users/' + currentUser.id + '/role').set(newRole);
-                            currentUser.role = newRole;
+                            // Use EstatoStorage.changeUserRole() — keeps all DB writes
+                            // inside the storage abstraction instead of calling firebase.database() directly.
+                            await EstatoStorage.changeUserRole(newRole);
                             showToast(`Role switched to ${newRole}! Reloading...`, 'success');
                             setTimeout(() => location.reload(), 1500);
                         } catch (e) {
@@ -1926,10 +1956,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderMessages() {
         let inquiries = EstatoStorage.getInquiries();
-        
-        // Security: Prevent Admins from arbitrarily reading direct buyer-seller messages.
-        // Both Sellers and Admins only read inquiries bound to properties they explicitly own.
-        if (currentUser.role !== 'Buyer') {
+
+        // Role-based inquiry visibility:
+        //   Buyers  — EstatoStorage already returns only their own inquiries (filtered by buyerId in loadAllData).
+        //   Sellers — EstatoStorage already returns only inquiries for their listings (filtered by ownerId).
+        //   Admins  — EstatoStorage returns all inquiries; no additional filter needed for oversight.
+        // An extra client-side filter for Sellers keeps the view scoped correctly if needed.
+        if (currentUser.role === 'Seller') {
             inquiries = inquiries.filter(inq => inq.ownerId === currentUser.id);
         }
         
@@ -2248,13 +2281,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function exportToPDF(properties) {
         if (!properties || properties.length === 0) {
-            alert('No properties to export.');
+            showToast('No properties to export.', 'info');
             return;
         }
 
         const { jsPDF } = window.jspdf;
         if (!jsPDF) {
-            alert('PDF library not loaded. Please check your connection.');
+            showToast('PDF library not loaded. Please check your internet connection.', 'danger');
             return;
         }
 
@@ -2665,7 +2698,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const rows = [
             { label: 'Price', key: 'price', icon: 'ph-tag', format: (v) => currencyFormatter.format(v), type: 'min' },
-            { label: 'Area', key: 'area', icon: 'ph-ruler', format: (v) => v.toLocaleString() + ' sq.ft', type: 'max' },
+            { label: 'Area', key: 'area', icon: 'ph-ruler', format: (v) => v != null ? Number(v).toLocaleString() + ' sq.ft' : 'N/A', type: 'max' },
             { label: 'Type', key: 'type', icon: 'ph-house-line' },
             { label: 'Layout', key: 'bhk', icon: 'ph-layout' },
             { label: 'Category', key: 'category', icon: 'ph-bookmarks' },
@@ -3425,11 +3458,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const user = EstatoStorage.getCurrentUser();
         const success = await EstatoStorage.loginWithGoogle(user ? user.role : 'Seller', false);
         if (success) {
-            alert('Re-authorization successful! You can now upload images.');
-            // Refresh preview area if it showed the error
+            showToast('Re-authorization successful! You can now upload images.', 'success');
             if (imagePreviewContainer) imagePreviewContainer.innerHTML = '';
         } else {
-            alert('Authorization failed. Please ensure popups are allowed.');
+            showToast('Authorization failed. Please ensure popups are allowed for this page.', 'danger');
         }
     };
 

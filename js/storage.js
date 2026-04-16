@@ -46,6 +46,15 @@ let _syncCallback = null;
 let _listenersInitialized = false;  // Guard: prevent stacking duplicate realtime listeners on re-auth
 let _dataChangeListeners = [];
 
+// Tracks every active Firebase .on() listener so they can be cleanly removed on logout.
+// Without this, each logout+re-login stacks another layer of duplicate listeners.
+let _listenerHandles = []; // [{ target: refOrQuery, handler: Function }]
+
+function _trackListener(target, handler) {
+    target.on('value', handler);
+    _listenerHandles.push({ target, handler });
+}
+
 // Local formatter for notification messages
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -95,6 +104,23 @@ var EstatoStorage = {
             let userSnap = await userRef.get();
             let roleToUse = selectedRole;
 
+            // If user requested Admin, hitting the `/api/make-admin` route first is mandatory
+            if (selectedRole === 'Admin') {
+                const idToken = await user.getIdToken();
+                const adminReq = await fetch('/api/make-admin', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + idToken
+                    }
+                });
+                
+                if (!adminReq.ok) {
+                    const errorText = await adminReq.json().catch(() => ({}));
+                    throw new Error(errorText.error || "Admin Registration failed: Access Denied.");
+                }
+            }
+
             if (!userSnap.exists()) {
                 // First time sign-up
                 await userRef.set({
@@ -143,56 +169,52 @@ var EstatoStorage = {
         if (!db) return;
 
         try {
-            // 1. Listen for Latest Properties (Real-time sync for the first batch)
-            db.ref('properties').limitToLast(20).on('value', (snap) => {
+            // 1. Latest Properties (real-time, paginated batch)
+            _trackListener(db.ref('properties').limitToLast(20), (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 this.mergeProperties(latestBatch);
-
                 this.notifyListeners();
             });
 
-            // 2. Listen for user-specific favorites
-            db.ref('favorites/' + uid).on('value', (snap) => {
+            // 2. User-specific favorites
+            _trackListener(db.ref('favorites/' + uid), (snap) => {
                 _memCache.favorites = snap.exists() ? (snap.val().ids || []) : [];
                 this.notifyListeners();
             });
 
-            // 3. Listen for inquiries
-            db.ref('inquiries').on('value', (snap) => {
-                if (snap.exists()) {
-                    const allInquiries = Object.values(snap.val());
-                    if (role === 'Admin') {
-                        _memCache.inquiries = allInquiries;
-                    } else if (role === 'Seller') {
-                        _memCache.inquiries = allInquiries.filter(i => i.ownerId === uid);
-                    } else {
-                        _memCache.inquiries = allInquiries.filter(i => i.buyerId === uid);
-                    }
-                } else {
-                    _memCache.inquiries = [];
-                }
-                this.notifyListeners();
-            });
+            // 3. Inquiries — use indexed queries so DB rules can restrict per-user.
+            //    Admin no longer has read access to the /inquiries node for privacy/security.
+            //    This matches the specific security rule in database.rules.json.
+            if (role === 'Admin') {
+                _memCache.inquiries = [];
+            } else if (role === 'Seller') {
+                _trackListener(db.ref('inquiries').orderByChild('ownerId').equalTo(uid), (snap) => {
+                    _memCache.inquiries = snap.exists() ? Object.values(snap.val()) : [];
+                    this.notifyListeners();
+                });
+            } else {
+                // Buyer
+                _trackListener(db.ref('inquiries').orderByChild('buyerId').equalTo(uid), (snap) => {
+                    _memCache.inquiries = snap.exists() ? Object.values(snap.val()) : [];
+                    this.notifyListeners();
+                });
+            }
 
-            // 4. Listen for personal notifications
-            db.ref('notifications/' + uid).on('value', (snap) => {
+            // 4. Personal notifications
+            _trackListener(db.ref('notifications/' + uid), (snap) => {
                 _memCache.notifications = snap.exists() ? (snap.val().items || []) : [];
                 this.notifyListeners();
             });
 
-            // 5. Listen for platform activities (Limit to latest 100)
-            db.ref('activities').orderByChild('timestamp').limitToLast(100).on('value', (snap) => {
-                if (snap.exists()) {
-                    _memCache.activities = Object.values(snap.val()).reverse(); // Newest first
-                } else {
-                    _memCache.activities = [];
-                }
+            // 5. Platform activity feed (latest 100, admin-read-only in DB rules)
+            _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
+                _memCache.activities = snap.exists() ? Object.values(snap.val()).reverse() : [];
                 this.notifyListeners();
             });
 
-            // 6. Listen for reviews
-            db.ref('reviews').on('value', (snap) => {
+            // 6. Reviews
+            _trackListener(db.ref('reviews'), (snap) => {
                 _memCache.reviews = snap.exists() ? Object.values(snap.val()) : [];
                 this.notifyListeners();
             });
@@ -203,8 +225,16 @@ var EstatoStorage = {
     },
 
     logout() {
-        _driveAccessToken = null;          // Clear OAuth token so it can't be reused after session ends
-        _listenersInitialized = false;     // Allow fresh listener registration on next login
+        _driveAccessToken = null;
+
+        // Detach every active Firebase .on() listener before signing out.
+        // Without this, old listeners survive logout and double up on re-login.
+        _listenerHandles.forEach(({ target, handler }) => {
+            try { target.off('value', handler); } catch (e) {}
+        });
+        _listenerHandles = [];
+        _listenersInitialized = false;
+
         auth.signOut();
         _memCache.currentUser = null;
     },
@@ -671,17 +701,38 @@ var EstatoStorage = {
     },
 
     async addReview(propertyId, rating, comment) {
-        if (_syncCallback) _syncCallback('syncing');
         const user = this.getCurrentUser();
-        if (!user) return;
+        if (!user) throw new Error('You must be logged in to leave a review.');
+
+        // Validate rating
+        const ratingNum = Number(rating);
+        if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+            throw new Error('Rating must be a number between 1 and 5.');
+        }
+
+        // Validate comment
+        const trimmedComment = comment ? comment.trim() : '';
+        if (!trimmedComment) {
+            throw new Error('Please write a comment before submitting your review.');
+        }
+
+        // Prevent duplicate reviews (one per user per property)
+        const existingReview = _memCache.reviews.find(
+            r => r.propertyId === propertyId && r.userId === user.id
+        );
+        if (existingReview) {
+            throw new Error('You have already reviewed this property.');
+        }
+
+        if (_syncCallback) _syncCallback('syncing');
 
         const review = {
             id: 'rev_' + Date.now(),
             propertyId,
             userId: user.id,
             userName: user.name,
-            rating: Number(rating),
-            comment: comment.trim(),
+            rating: ratingNum,
+            comment: trimmedComment,
             date: new Date().toISOString()
         };
 
@@ -784,6 +835,30 @@ var EstatoStorage = {
             if (e.message === 'Failed to fetch') {
                 throw new Error("Failed to fetch: Service Worker or Network blocked the request. Please Hard Refresh (Ctrl+F5) and ensure your internet is stable.");
             }
+            throw e;
+        }
+    },
+
+    /**
+     * Change the current user's role between Buyer and Seller.
+     * Admins cannot change their own role — they must use the Firebase console.
+     * This method centralises the DB write inside the storage layer,
+     * removing the need for direct firebase.database() calls in app.v12.js.
+     */
+    async changeUserRole(newRole) {
+        const user = _memCache.currentUser;
+        if (!user) throw new Error('Not authenticated.');
+        if (user.role === 'Admin') throw new Error('Admin role cannot be changed from the app.');
+        if (newRole !== 'Buyer' && newRole !== 'Seller') throw new Error('Invalid role value.');
+
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            await db.ref('users/' + user.id + '/role').set(newRole);
+            _memCache.currentUser.role = newRole;
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            if (_syncCallback) _syncCallback('error');
             throw e;
         }
     }

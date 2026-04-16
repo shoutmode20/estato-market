@@ -24,11 +24,12 @@
       }
     },
     "inquiries": {
-      ".read": "auth != null",
       "$inqId": {
+        ".read": "auth != null && (data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)",
         ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('buyerId').val() === auth.uid) || (data.exists() && (data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)))",
         ".validate": "newData.hasChildren(['propertyId', 'buyerId', 'ownerId', 'message'])"
-      }
+      },
+      ".indexOn": ["buyerId", "ownerId"]
     },
     "notifications": {
       "$uid": {
@@ -38,7 +39,10 @@
     },
     "activities": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin'",
-      ".write": "auth != null"
+      "$actId": {
+        ".write": "auth != null && !data.exists()",
+        ".validate": "newData.hasChildren(['userId', 'action', 'details', 'timestamp', 'role']) && newData.child('userId').val() === auth.uid && root.child('users').child(auth.uid).child('role').val() === newData.child('role').val()"
+      }
     },
     "reviews": {
       ".read": "auth != null",
