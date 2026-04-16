@@ -1569,7 +1569,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (searchQuery) {
             const keywords = searchQuery.toLowerCase().split(/\s+/).filter(x => x);
             properties = properties.filter(p => {
-                const combinedText = `${p.id} ${p.title} ${p.city} ${p.address} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
+                const combinedText = `${p.id} ${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.projectName || ''} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
                 // Smart Match: All keywords must be present in the combined text (Logical AND)
                 return keywords.every(kw => combinedText.includes(kw));
             });
