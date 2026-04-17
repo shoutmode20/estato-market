@@ -24,7 +24,7 @@
       }
     },
     "inquiries": {
-      ".read": "auth != null",
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin'",
       "$inqId": {
         ".read": "auth != null && (data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)",
         ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('buyerId').val() === auth.uid) || (data.exists() && (data.child('buyerId').val() === auth.uid || data.child('ownerId').val() === auth.uid)))",
@@ -35,7 +35,7 @@
     "user_inquiries": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
-        ".write": "auth != null && $uid === auth.uid"
+        ".write": "auth != null"
       }
     },
     "notifications": {

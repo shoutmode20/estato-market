@@ -384,6 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     renderView(currentView, searchInput.value);
                     renderNotifications();
+                    updateSidebarBadges();
                     updateSeoMetadata();
                 }, 150);
                 EstatoStorage.subscribe(_debouncedRender);
@@ -438,22 +439,38 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
     }
-
+    
     function applyRBACToDOM() {
         if (!currentUser) return; // Guard: auth may not have resolved yet
         const adminElements = document.querySelectorAll('.admin-only');
         const role = currentUser.role;
 
         if (role === 'Buyer') {
-            adminElements.forEach(el => el.style.display = 'none');
+            adminElements.forEach(el => {
+                if (el.getAttribute('data-view') === 'messages') el.style.display = 'flex'; // Buyers always see messages
+                else el.style.display = 'none';
+            });
         } else if (role === 'Seller' || role === 'Admin') {
-            adminElements.forEach(el => el.style.display = '');
+            adminElements.forEach(el => el.style.display = 'flex');
         }
 
-        // Hide Messages specifically for Admin to enforce privacy boundaries
-        const msgNavNode = document.querySelector('li[data-view="messages"]');
-        if (msgNavNode) {
-            msgNavNode.style.display = (role === 'Admin') ? 'none' : 'flex';
+    }
+
+
+    function updateSidebarBadges() {
+        if (!currentUser) return;
+        const count = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Admin') ? currentUser.id : null)
+            .filter(inq => inq.status === 'Unread')
+            .length;
+
+        const badge = document.getElementById('msgBadge');
+        if (badge) {
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
         }
     }
 
@@ -2525,6 +2542,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderAdminActivityFeed() {
         const activities = EstatoStorage.getActivities().slice(0, 15);
+        const stats = EstatoStorage.getStats();
         
         const getActionStyle = (action) => {
             if (action.includes('ADD')) return { icon: 'ph-plus-circle', color: '#10b981' };
@@ -2544,7 +2562,31 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         return `
-            <div class="dashboard-card surface-panel" style="margin-top: 2rem; border-top: 3px solid var(--primary); padding: 1.5rem; border-radius: var(--radius-lg);">
+            <div class="dashboard-valuation">
+             <h3><i class="ph ph-envelope-simple-open" style="color:var(--primary);"></i> Recent Platform Inquiries</h3>
+             <div class="surface-panel" style="padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 2rem;">
+                 ${(stats && stats.totalInquiries > 0) ? `
+                     <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                         ${(EstatoStorage.getInquiries() || []).slice(0, 3).map(inq => `
+                             <div class="clickable-stat" onclick="document.querySelector('.nav-item[data-view=\\'messages\\']')?.click()" style="padding: 0.75rem; background: var(--bg-hover); border-radius: 8px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+                                 <div>
+                                     <div style="font-weight: 700; font-size: 0.9rem;">${escapeHtml(inq.buyerName)} <span style="font-weight: 400; color: var(--text-muted); font-size: 0.75rem;">re: ${escapeHtml(inq.propertyTitle)}</span></div>
+                                     <div style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px;">${escapeHtml(inq.message)}</div>
+                                 </div>
+                                 <span class="badge badge-secondary">${inq.status}</span>
+                             </div>
+                         `).join('')}
+                         <button class="btn btn-secondary w-full" style="margin-top: 0.5rem;" onclick="document.querySelector('.nav-item[data-view=\\'messages\\']')?.click()">View All Messages</button>
+                     </div>
+                 ` : `
+                     <div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                         <i class="ph ph-envelope-simple-slash" style="font-size: 2rem; opacity: 0.5;"></i>
+                         <p>No platform inquiries yet.</p>
+                     </div>
+                 `}
+             </div>
+        </div>
+        <div class="dashboard-card surface-panel" style="margin-top: 2rem; border-top: 3px solid var(--primary); padding: 1.5rem; border-radius: var(--radius-lg);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                     <h3 style="display: flex; align-items: center; gap: 0.75rem; margin: 0; font-size: 1.16rem; font-weight: 700;">
                         <i class="ph-duotone ph-clock-counter-clockwise" style="color: var(--primary);"></i> Platform Activity Feed

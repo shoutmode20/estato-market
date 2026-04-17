@@ -1,8 +1,15 @@
-import { escapeHtml, showConfirm } from './utils.js';
+import { escapeHtml, showConfirm, showToast } from './utils.js';
 
 export function renderMessages(ctx) {
     const { currentUser, EstatoStorage, viewContainer } = ctx;
-    const inquiries = EstatoStorage.getInquiries(currentUser.role === 'Seller' ? currentUser.id : null);
+    const inquiries = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Admin') ? currentUser.id : null);
+    
+    // Auto-mark as read when viewing the messages list
+    inquiries.forEach(inq => {
+        if (inq.status === 'Unread') {
+            EstatoStorage.markInquiryRead(inq.id);
+        }
+    });
 
     let html = `
         <div class="section-header">
@@ -38,20 +45,27 @@ export function renderMessages(ctx) {
             ];
 
             return `
-                        <div class="surface-panel shadow-sm message-card ${inq.status === 'Unread' ? 'unread-glow' : ''}" style="padding: 1.5rem; transition: transform 0.2s;">
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
-                                <div style="display: flex; gap: 1rem; align-items: center;">
-                                    <div class="avatar" style="background: var(--primary-light); color: var(--primary); font-weight: 700;">${inq.buyerName.charAt(0)}</div>
-                                    <div>
-                                        <h4 style="margin: 0; font-size: 1rem;">${escapeHtml(inq.buyerName)}</h4>
-                                        <p style="margin: 0; font-size: 0.8rem; color: var(--text-muted);">${inq.buyerEmail}</p>
+                            <div class="surface-panel shadow-sm message-card ${inq.status === 'Unread' ? 'unread-glow' : ''}" style="padding: 1.5rem; transition: transform 0.2s;">
+                                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+                                    <div style="display: flex; gap: 1rem; align-items: center;">
+                                        <div class="avatar" style="background: var(--primary-light); color: var(--primary); font-weight: 700;">${inq.buyerName.charAt(0)}</div>
+                                        <div>
+                                            <h4 style="margin: 0; font-size: 1rem;">${escapeHtml(inq.buyerName)}</h4>
+                                            <p style="margin: 0; font-size: 0.8rem; color: var(--text-muted);">${inq.buyerEmail}</p>
+                                        </div>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        ${currentUser.role === 'Admin' ? `
+                                            <div style="font-size: 0.65rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 6px; background: var(--primary-light); padding: 2px 6px; border-radius: 4px; display: inline-block;">
+                                                <i class="ph ph-user"></i> To Seller ID: ${inq.ownerId.substring(0,6)}...
+                                            </div>
+                                        ` : ''}
+                                        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                                            <span class="badge ${inq.status === 'Unread' ? 'badge-primary' : 'badge-secondary'}">${inq.status}</span>
+                                            <div style="font-size: 0.75rem; color: var(--text-muted);">Re: ${escapeHtml(inq.propertyTitle)}</div>
+                                        </div>
                                     </div>
                                 </div>
-                                <div style="text-align: right;">
-                                    <span class="badge ${inq.status === 'Unread' ? 'badge-primary' : 'badge-secondary'}" style="margin-bottom: 4px;">${inq.status}</span>
-                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Re: ${escapeHtml(inq.propertyTitle)}</div>
-                                </div>
-                            </div>
                             
                             <div class="thread-container" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; background: var(--bg-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
                                 ${thread.map(msg => {
@@ -109,9 +123,26 @@ export function renderMessages(ctx) {
     viewContainer.querySelectorAll('.thread-delete-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const inqId = btn.getAttribute('data-id');
-            showConfirm('Remove this conversation from your view? (It will still be visible to the other person)', async () => {
-                await EstatoStorage.deleteInquiry(inqId);
-            });
+            const isAdmin = currentUser.role === 'Admin';
+
+            if (isAdmin) {
+                // Admin gets two options via nested confirm or simplified choice
+                showConfirm('ADMIN: Permentantly purge this conversation for EVERYONE in the platform?', async () => {
+                    const ok = await EstatoStorage.purgeInquiryGlobal(inqId);
+                    if (ok) showToast('Conversation purged from platform.', 'success');
+                }, () => {
+                    // Canceled purge? Ask for private removal
+                    showConfirm('Remove this conversation from YOUR view only?', async () => {
+                        const ok = await EstatoStorage.deleteInquiry(inqId);
+                        if (ok) showToast('Conversation hidden from your view.', 'success');
+                    });
+                });
+            } else {
+                showConfirm('Remove this conversation from your view? (It will still be visible to the other person)', async () => {
+                    const ok = await EstatoStorage.deleteInquiry(inqId);
+                    if (ok) showToast('Conversation removed from view.', 'success');
+                });
+            }
         });
     });
 
@@ -124,16 +155,15 @@ export function renderMessages(ctx) {
                 ? 'Delete the starting message? This will clear the inquiry text for everyone.' 
                 : 'Delete this message for everyone?';
             
-            showConfirm(confirmMsg, async () => {
-                if (msgId === 'msg_root') {
-                    // Specific handling for root message clear (Optional, we could just block it)
-                    // For now, we'll implement a 'deleteInquiryReply' style for it too if needed.
-                    // But we'll stick to our plan.
-                    await EstatoStorage.deleteInquiryReply(inqId, msgId);
-                } else {
-                    await EstatoStorage.deleteInquiryReply(inqId, msgId);
-                }
-            });
+                showConfirm(confirmMsg, async () => {
+                    let ok = false;
+                    if (msgId === 'msg_root') {
+                        ok = await EstatoStorage.deleteInquiryReply(inqId, msgId);
+                    } else {
+                        ok = await EstatoStorage.deleteInquiryReply(inqId, msgId);
+                    }
+                    if (ok) showToast('Message deleted.', 'success');
+                });
         });
     });
 }

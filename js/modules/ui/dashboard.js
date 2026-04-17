@@ -11,7 +11,7 @@ export function renderDashboard(ctx) {
     dashboardCharts.forEach(chunk => chunk.destroy());
     dashboardCharts.length = 0;
 
-    const stats = EstatoStorage.getDashboardStats(currentUser.role === 'Admin' ? null : currentUser.id);
+    const stats = EstatoStorage.getStats(currentUser.role === 'Admin' ? null : currentUser.id);
 
     let html = `
         <div class="section-header" style="margin-bottom: 2rem;">

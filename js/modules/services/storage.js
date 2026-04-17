@@ -188,68 +188,58 @@ export const EstatoStorage = {
                 self.notifyListeners();
             }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
 
-            // 3. Inquiries — use indexed index to maintain strict per-user privacy.
-            //    Admin should not be able to read user's private chats.
-            console.log(`[Storage] Initializing secure inquiry listener for ${uid} (${role})`);
+            // 3. Inquiries — Private isolated sync for all users
             const _inquiryCacheMap = new Map();
-            _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
-                    if (!snap.exists()) {
-                        _inquiryCacheMap.clear();
-                        _memCache.inquiries = [];
-                        self.notifyListeners();
-                        return;
-                    }
-                    const indexedIds = Object.keys(snap.val());
-                    
-                    // 1. Remove cached items that are no longer in the user's index (Private Deletion Handled)
-                    for (const inqId of _inquiryCacheMap.keys()) {
-                        if (!indexedIds.includes(inqId)) {
-                            console.log(`[Sync] 🗑️ Removing thread from private view: ${inqId}`);
-                            _inquiryCacheMap.delete(inqId);
-                        }
-                    }
-
-                    // Rebuild cache and notify UI of index changes (Removals or New Threads)
-                    const updateCache = () => {
-                        _memCache.inquiries = Array.from(_inquiryCacheMap.values())
-                            .sort((a,b) => {
-                                const getLatestDate = (inq) => {
-                                    if (inq.replies && inq.replies.length > 0) {
-                                        const last = inq.replies[inq.replies.length - 1];
-                                        return new Date(last.date || last.timestamp);
-                                    }
-                                    return new Date(inq.date || inq.timestamp);
-                                };
-                                return getLatestDate(b) - getLatestDate(a);
-                            });
-                        self.notifyListeners();
-                    };
-
-                    updateCache();
-
-                    // 2. Add listeners for newly indexed items
-                    indexedIds.forEach(inqId => {
-                        if (!_inquiryCacheMap.has(inqId)) {
-                             console.log(`[Sync] 🔍 Attaching real-time listener to thread: ${inqId}`);
-                             _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
-                                if (inqSnap.exists()) {
-                                    const data = inqSnap.val();
-                                    _inquiryCacheMap.set(inqId, data);
-                                } else {
-                                    _inquiryCacheMap.delete(inqId);
-                                }
-                                updateCache();
-                            }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
-                        }
+            const updateCache = () => {
+                _memCache.inquiries = Array.from(_inquiryCacheMap.values())
+                    .sort((a,b) => {
+                        const getLatestDate = (inq) => {
+                            if (inq.replies && inq.replies.length > 0) {
+                                const last = inq.replies[inq.replies.length - 1];
+                                return new Date(last.date || last.timestamp);
+                            }
+                            return new Date(inq.date || inq.timestamp);
+                        };
+                        return getLatestDate(b) - getLatestDate(a);
                     });
-                }, (err) => {
-                    console.error("[Storage] Inquiry Index Listener Error:", err.message);
-                });
+                self.notifyListeners();
+            };
 
-                // --- LEGACY MIGRATION (Self-healing) ---
-                // Try to discover old inquiries that aren't indexed yet.
-                // This works now because we temporarily allowed non-Admin global read on /inquiries.
+            console.log(`[Storage] Initializing secure PRIVATE inquiry listener for ${uid}`);
+            _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
+                if (!snap.exists()) {
+                    _inquiryCacheMap.clear();
+                    updateCache();
+                    return;
+                }
+                
+                const indexedIds = Object.keys(snap.val());
+                
+                // Cleanup removed items
+                for (const inqId of _inquiryCacheMap.keys()) {
+                    if (!indexedIds.includes(inqId)) _inquiryCacheMap.delete(inqId);
+                }
+
+                // Attach detail listeners for each indexed thread
+                indexedIds.forEach(inqId => {
+                    if (!_inquiryCacheMap.has(inqId)) {
+                         _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
+                            if (inqSnap.exists()) {
+                                _inquiryCacheMap.set(inqId, { id: inqId, ...inqSnap.val() });
+                            } else {
+                                _inquiryCacheMap.delete(inqId);
+                            }
+                            updateCache();
+                        }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
+                    }
+                });
+            }, (err) => console.error("[Storage] Inquiry Index Listener Error:", err.message));
+
+            // 6. Legacy Migration (Self-healing for Admins only)
+            // This discovers threads that existed before the index was created.
+            if (role === 'Admin') {
                 this._performInquiryMigration(uid, role);
+            }
 
             // 4. Personal notifications
             _trackListener(db.ref('notifications/' + uid), (snap) => {
@@ -617,7 +607,7 @@ export const EstatoStorage = {
 
         inquiry.id = 'inq_' + Date.now();
         inquiry.date = new Date().toISOString();
-        inquiry.read = false;
+        inquiry.status = 'Unread';
 
         _memCache.inquiries.push(inquiry);
         try {
@@ -668,6 +658,9 @@ export const EstatoStorage = {
         replyPayload.date = new Date().toISOString();
         inquiry.replies.push(replyPayload);
 
+        // Update status for the other participants
+        inquiry.status = 'Unread';
+
         try {
             console.log(`[Sync] 📤 Outbound Reply: ${inquiryId}`);
             await db.ref('inquiries/' + inquiryId + '/replies').set(inquiry.replies);
@@ -710,11 +703,50 @@ export const EstatoStorage = {
             // Only remove from the private index. Do NOT delete the shared 'inquiries' node.
             await db.ref(`user_inquiries/${uid}/${id}`).remove();
             
+            this.notifyListeners();
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
             console.error("[Storage] Private deletion failed:", e.message);
             if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
+    async purgeInquiryGlobal(id) {
+        if (_memCache.currentUser.role !== 'Admin') throw new Error("Unauthorized: Admin only.");
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            // 1. Remove from inquiries root
+            await db.ref(`inquiries/${id}`).remove();
+            
+            // 2. We don't necessarily have to find all user indexes to delete it (it will just fail silently when they try to load)
+            // but we SHOULD remove it for the current admin too.
+            const uid = auth.currentUser.uid;
+            await db.ref(`user_inquiries/${uid}/${id}`).remove();
+
+            this.notifyListeners();
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error("[Storage] Global purge failed:", e.message);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
+    async markInquiryRead(id) {
+        const index = _memCache.inquiries.findIndex(i => i.id === id);
+        if (index === -1) return false;
+        if (_memCache.inquiries[index].status === 'Read') return true;
+
+        _memCache.inquiries[index].status = 'Read';
+        try {
+            await db.ref(`inquiries/${id}/status`).set('Read');
+            this.notifyListeners();
+            return true;
+        } catch (e) {
+            console.error("[Storage] Failed to mark inquiry read:", e.message);
             return false;
         }
     },
@@ -729,6 +761,15 @@ export const EstatoStorage = {
             }
 
             const inquiry = snap.val();
+            
+            // SPECIAL CASE: Root Message Deletion
+            if (replyId === 'msg_root') {
+                await db.ref(`inquiries/${inquiryId}/message`).set("[This message was deleted by the sender]");
+                if (_syncCallback) _syncCallback('synced');
+                return true;
+            }
+
+            // Standard Reply Deletion
             if (!inquiry.replies) {
                 if (_syncCallback) _syncCallback('synced');
                 return false;
@@ -799,7 +840,7 @@ export const EstatoStorage = {
         } catch (e) { }
     },
 
-    getDashboardStats() {
+    getStats() {
         const properties = this.getProperties();
         const user = this.getCurrentUser();
         if (!user) return { totalProperties: 0, totalCities: 0, forSale: 0, forRent: 0, totalValuation: 0, pendingCount: 0, availableCount: 0, avgPriceByCity: {}, typeDistribution: {} };
@@ -833,8 +874,11 @@ export const EstatoStorage = {
         const avgPriceByCity = {};
         for (const city in stats.cityData) avgPriceByCity[city] = Math.round(stats.cityData[city].total / stats.cityData[city].count);
 
+        const userInquiries = this.getInquiries(user.id);
+        
         return {
             totalProperties: stats.totalProperties,
+            totalInquiries: userInquiries.length,
             totalCities: Object.keys(stats.cityData).length,
             forSale: stats.forSale,
             forRent: stats.forRent,
@@ -843,9 +887,9 @@ export const EstatoStorage = {
             pendingCount: stats.pendingCount,
             availableCount: stats.availableCount,
             avgPriceByCity: avgPriceByCity,
-            typeDistribution: stats.typeDistribution
         };
     },
+    getDashboardStats(uid) { return this.getStats(uid); },
 
     // ── Reviews Sync ──
     getReviewsByProperty(propertyId) {

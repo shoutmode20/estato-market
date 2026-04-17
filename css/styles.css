@@ -77,6 +77,27 @@ body {
     display: none !important;
 }
 
+.nav-badge {
+    position: absolute;
+    right: 1rem;
+    background: var(--primary);
+    color: white;
+    font-size: 0.65rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 10px rgba(234, 88, 12, 0.4);
+}
+
+.nav-item {
+    position: relative;
+}
+
 .shadow-hover {
     transition: var(--transition);
 }
