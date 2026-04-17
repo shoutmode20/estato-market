@@ -4,7 +4,8 @@
   "description": "Estato — Premium Real Estate Marketplace powered by Firebase",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "jest --env=jsdom"
   },
   "keywords": [
     "real-estate",
@@ -17,5 +18,12 @@
     "dotenv": "^17.4.2",
     "express": "^4.22.1",
     "firebase-admin": "^13.8.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-env": "^7.29.2",
+    "babel-jest": "^30.3.0",
+    "jest": "^30.3.0",
+    "jest-environment-jsdom": "^30.3.0"
   }
 }

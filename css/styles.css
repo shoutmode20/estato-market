@@ -18,9 +18,13 @@
     --radius-sm: 8px;
     --transition: 0.2s ease;
     
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.15), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.12);
+    --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+    
+    --surface-glass: rgba(255, 255, 255, 0.85);
+    --glass-border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
 * {
@@ -62,8 +66,11 @@ body {
 
 /* Base Panel Utilities */
 .surface-panel {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-color);
+    background: var(--surface-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: var(--glass-border);
+    box-shadow: var(--shadow-glass);
 }
 
 .hidden {
@@ -769,24 +776,27 @@ body {
 .property-card {
     display: flex;
     flex-direction: column;
+    background: var(--surface-glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: var(--glass-border);
     border-radius: var(--radius-md);
     overflow: hidden;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: var(--shadow-sm);
-    /* UI Improvement: Default hidden state for fade-in */
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: var(--shadow-glass);
     opacity: 0;
-    animation: slideUpFade 0.4s ease-out forwards;
+    animation: slideUpFade 0.5s ease-out forwards;
 }
 
 @keyframes slideUpFade {
-    from { opacity: 0; transform: translateY(15px); }
-    to { opacity: 1; transform: translateY(0); }
+    0% { opacity: 0; transform: translateY(20px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .property-card:hover {
-    transform: translateY(-4px);
+    transform: translateY(-6px) scale(1.01);
     box-shadow: var(--shadow-lg);
-    border-color: var(--primary);
+    border-color: rgba(220, 88, 42, 0.3); /* Subtle primary tint on border */
 }
 
 .card-img {

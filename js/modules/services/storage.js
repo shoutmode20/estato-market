@@ -63,7 +63,7 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
 });
 
 // ─── Public Storage API ───────────────────────────────────────────
-var EstatoStorage = {
+export const EstatoStorage = {
     getCurrentUser() { return _memCache.currentUser; },
 
     async initDrive(syncCb) {
@@ -167,6 +167,7 @@ var EstatoStorage = {
 
         console.log("[Estato Firebase] Initializing Real-time Listeners...");
         if (!db) return;
+        const self = this;
 
         try {
             // 1. Latest Properties (real-time, paginated batch)
@@ -183,23 +184,41 @@ var EstatoStorage = {
                 this.notifyListeners();
             });
 
-            // 3. Inquiries — use indexed queries so DB rules can restrict per-user.
-            //    Admin no longer has read access to the /inquiries node for privacy/security.
-            //    This matches the specific security rule in database.rules.json.
-            if (role === 'Admin') {
-                _memCache.inquiries = [];
-            } else if (role === 'Seller') {
-                _trackListener(db.ref('inquiries').orderByChild('ownerId').equalTo(uid), (snap) => {
-                    _memCache.inquiries = snap.exists() ? Object.values(snap.val()) : [];
-                    this.notifyListeners();
+            // 3. Inquiries — use indexed index to maintain strict per-user privacy.
+            //    Admin should not be able to read user's private chats.
+            console.log(`[Storage] Initializing secure inquiry listener for ${uid} (${role})`);
+            const _inquiryCacheMap = new Map();
+            _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
+                    console.log(`[Storage] Inquiry index update. Exists: ${snap.exists()}, Count: ${snap.exists() ? Object.keys(snap.val()).length : 0}`);
+                    if (!snap.exists()) {
+                        _memCache.inquiries = [];
+                        this.notifyListeners();
+                        return;
+                    }
+                    const ids = Object.keys(snap.val());
+                    ids.forEach(inqId => {
+                        if (!_inquiryCacheMap.has(inqId)) {
+                            // First time seeing this inquiry: set up a specific listener
+                            _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
+                                if (inqSnap.exists()) {
+                                    _inquiryCacheMap.set(inqId, inqSnap.val());
+                                } else {
+                                    _inquiryCacheMap.delete(inqId);
+                                }
+                                _memCache.inquiries = Array.from(_inquiryCacheMap.values())
+                                    .sort((a,b) => new Date(b.date || b.timestamp) - new Date(a.date || a.timestamp));
+                                self.notifyListeners();
+                            });
+                        }
+                    });
+                }, (err) => {
+                    console.error("[Storage] Inquiry Index Listener Error:", err.message);
                 });
-            } else {
-                // Buyer
-                _trackListener(db.ref('inquiries').orderByChild('buyerId').equalTo(uid), (snap) => {
-                    _memCache.inquiries = snap.exists() ? Object.values(snap.val()) : [];
-                    this.notifyListeners();
-                });
-            }
+
+                // --- LEGACY MIGRATION (Self-healing) ---
+                // Try to discover old inquiries that aren't indexed yet.
+                // This works now because we temporarily allowed non-Admin global read on /inquiries.
+                this._performInquiryMigration(uid, role);
 
             // 4. Personal notifications
             _trackListener(db.ref('notifications/' + uid), (snap) => {
@@ -221,6 +240,36 @@ var EstatoStorage = {
 
         } catch (e) {
             console.error("[Estato Firebase] Failed to initialize listeners", e);
+        }
+    },
+
+    /**
+     * One-time bridge to find legacy inquiries (created before the index)
+     * and add them to the new user_inquiries index for the current user.
+     */
+    async _performInquiryMigration(uid, role) {
+        try {
+            // Check both participants (as buyer and as seller)
+            const queries = [
+                db.ref('inquiries').orderByChild('buyerId').equalTo(uid),
+                db.ref('inquiries').orderByChild('ownerId').equalTo(uid)
+            ];
+
+            for (const q of queries) {
+                const snap = await q.once('value');
+                if (snap.exists()) {
+                    const indexUpdates = {};
+                    Object.keys(snap.val()).forEach(inqId => {
+                        indexUpdates[inqId] = true;
+                    });
+                    if (Object.keys(indexUpdates).length > 0) {
+                        console.log(`[Storage] Migrating ${Object.keys(indexUpdates).length} legacy inquiries for ${uid}`);
+                        await db.ref(`user_inquiries/${uid}`).update(indexUpdates);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("[Storage] Migration scan failed (expected if rules are restricted):", e.message);
         }
     },
 
@@ -538,6 +587,10 @@ var EstatoStorage = {
         try {
             await db.ref('inquiries/' + inquiry.id).set(inquiry);
 
+            // Maintain a per-user index for privacy-compliant listings
+            await db.ref(`user_inquiries/${inquiry.buyerId}/${inquiry.id}`).set(true);
+            await db.ref(`user_inquiries/${inquiry.ownerId}/${inquiry.id}`).set(true);
+
             // Add notification to the seller
             const notifRef = db.ref('notifications/' + inquiry.ownerId);
             const docSnap = await notifRef.get();
@@ -662,18 +715,30 @@ var EstatoStorage = {
         } catch (e) { }
     },
 
-    getStats() {
+    getDashboardStats() {
         const properties = this.getProperties();
         const user = this.getCurrentUser();
-        if (!user) return { totalProperties: 0, totalCities: 0, forSale: 0, forRent: 0, totalValue: 0, avgPriceByCity: {}, typeDistribution: {} };
+        if (!user) return { totalProperties: 0, totalCities: 0, forSale: 0, forRent: 0, totalValuation: 0, pendingCount: 0, availableCount: 0, avgPriceByCity: {}, typeDistribution: {} };
 
         const filtered = user.role === 'Admin' ? properties : properties.filter(p => p.ownerId === user.id);
-        const stats = { totalProperties: filtered.length, totalValue: 0, forSale: 0, forRent: 0, cityData: {}, typeDistribution: { 'Sale': 0, 'Rent': 0 } };
+        const stats = { 
+            totalProperties: filtered.length, 
+            totalValue: 0, 
+            forSale: 0, 
+            forRent: 0, 
+            pendingCount: 0,
+            availableCount: 0,
+            cityData: {}, 
+            typeDistribution: { 'Sale': 0, 'Rent': 0 } 
+        };
 
         filtered.forEach(p => {
             stats.totalValue += p.price;
             if (p.type === 'Sale') stats.forSale++;
             if (p.type === 'Rent') stats.forRent++;
+            if (p.status === 'Pending') stats.pendingCount++;
+            if (p.status === 'Available') stats.availableCount++;
+            
             stats.typeDistribution[p.type] = (stats.typeDistribution[p.type] || 0) + 1;
 
             if (!stats.cityData[p.city]) stats.cityData[p.city] = { count: 0, total: 0 };
@@ -689,7 +754,9 @@ var EstatoStorage = {
             totalCities: Object.keys(stats.cityData).length,
             forSale: stats.forSale,
             forRent: stats.forRent,
-            totalValue: stats.totalValue,
+            totalValuation: stats.totalValue,
+            pendingCount: stats.pendingCount,
+            availableCount: stats.availableCount,
             avgPriceByCity: avgPriceByCity,
             typeDistribution: stats.typeDistribution
         };
@@ -864,4 +931,5 @@ var EstatoStorage = {
     }
 };
 window.EstatoStorage = EstatoStorage;
+window.dumpEstatoStorage = () => { console.log("[Debug] Current _memCache:", _memCache); return _memCache; };
 

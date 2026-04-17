@@ -373,6 +373,11 @@
                 <form id="replyForm">
                     <input type="hidden" id="replyInqId">
                     
+                    <div style="margin-bottom: 1.25rem; background: var(--bg-hover); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 0.9rem;">
+                        <span style="color: var(--text-muted);">Replying to:</span> 
+                        <strong id="replyTargetName" style="color: var(--primary);">User</strong>
+                    </div>
+
                     <div class="form-group">
                         <label>Your Message</label>
                         <textarea id="replyMessage" required rows="4" style="width: 100%; resize: vertical; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.95rem; line-height: 1.5;" placeholder="Write your reply..."></textarea>
@@ -500,8 +505,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <script src="./js/config.js"></script>
-    <script src="./js/storage.js?v=12.7"></script>
-    <script src="./js/app.v12.js?v=12.7"></script>
+    <script type="module" src="./js/modules/main.js?v=12.9"></script>
     <!-- PWA Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {

@@ -1,11 +1,18 @@
-const CACHE_NAME = 'estato-v12.7';
+const CACHE_NAME = 'estato-v12.1';
 const ASSETS = [
     './',
     './index.html',
     './css/styles.css',
     './js/config.js',
-    './js/app.v12.js?v=12.7',
-    './js/storage.js?v=12.7',
+    './js/modules/main.js',
+    './js/modules/services/storage.js',
+    './js/modules/ui/map-engine.js',
+    './js/modules/ui/property-card.js',
+    './js/modules/ui/dashboard.js',
+    './js/modules/ui/forms.js',
+    './js/modules/ui/messaging.js',
+    './js/modules/ui/utils.js',
+    './js/modules/core/state.js',
     './assets/icons/icon-192.png',
     './assets/icons/icon-512.png',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js',

@@ -1,3 +1,34 @@
+// --- Global Error Reporting (Diagnostic Mode) ---
+window.onerror = function(msg, url, line, col, error) {
+    console.error("[Crashed] Global Error:", msg, "at", url, ":", line);
+    // Subtle alert for the user during this diagnostic phase
+    const toast = document.createElement('div');
+    toast.style = "position:fixed;bottom:20px;left:20px;background:#ef4444;color:white;padding:12px;border-radius:8px;z-index:10000;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);font-family:sans-serif;font-size:13px;max-width:300px;";
+    toast.innerHTML = `⚠️ <b>App Error:</b> ${msg.split(':')[0]} <br> Check console for details.`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 7000);
+    return false;
+};
+
+window.onunhandledrejection = function(event) {
+    console.error("[Crashed] Unhandled Promise Rejection:", event.reason);
+};
+
+import { EstatoStorage } from './services/storage.js';
+import { escapeHtml, showToast, showConfirm, debounce } from './ui/utils.js';
+import { State, updateState } from './core/state.js';
+import {
+    initMap, destroyMap, updateMapMarkers, toggleMapView, getIsMapVisible,
+    initModalMap, updateModalMarker, destroyModalMap, reverseGeocode, CITY_COORDS
+} from './ui/map-engine.js';
+import {
+    generatePropertyCard as coreGenerateCard, sortProperties, filterByRole, applyFilters,
+    getSimilarProperties as coreSimilarProps, PROPERTY_METADATA
+} from './ui/property-card.js';
+import { renderDashboard as externalRenderDashboard } from './ui/dashboard.js';
+import { renderMessages as externalRenderMessages } from './ui/messaging.js';
+import { initForms } from './ui/forms.js';
+
 /* Estato V12.1 - Production - SEO & Pagination Enabled */
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -21,98 +52,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let dashboardCharts = [];
 
-    // V11 States
+    // V11 States — map instance vars kept here; map-engine.js owns its own private copies
     let map = null;
     let mapLayerGroup = null;
     let markers = [];
     let isMapVisible = false;
-    // compareList is intentionally empty at parse time — properties aren't in memory yet.
-    // It is restored from localStorage on the first successful data load inside the subscribe callback.
-    let compareList = [];
-    let _compareRestored = false; // One-shot guard so restore runs only once per session
     let modalMap = null;
     let modalMarker = null;
 
     // Radius Search States
     let currentRadiusCenter = null; // {lat, lng}
     let currentRadiusKm = 10;
-    // Holds computed km distances for the current render pass.
-    // Kept separate from property objects to prevent contaminating Firebase writes.
+
+    // Compare & distance
+    let compareList = [];
+    let _compareRestored = false;
     let _renderDistanceMap = new Map();
     
-    // --- Utilities ---
-    function debounce(func, wait) {
-        let timeout;
-        return function(...args) {
-            clearTimeout(timeout);
-            timeout = setTimeout(() => func.apply(this, args), wait);
-        };
-    }
-
-    /** Sanitize any user-generated string before injecting into innerHTML to prevent Stored XSS */
-    function escapeHtml(str) {
-        if (str === null || str === undefined) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
-
-    /**
-     * Non-blocking toast notification system.
-     * Replaces all blocking alert() calls throughout the app.
-     * @param {string} message - Text to display
-     * @param {'info'|'success'|'danger'|'warning'} type - Visual style
-     * @param {number} duration - Auto-dismiss delay in ms
-     */
-    function showToast(message, type = 'info', duration = 4500) {
-        let container = document.getElementById('toastContainer');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toastContainer';
-            Object.assign(container.style, {
-                position: 'fixed', bottom: '1.5rem', right: '1.5rem',
-                zIndex: '99999', display: 'flex', flexDirection: 'column',
-                gap: '0.5rem', maxWidth: '400px', pointerEvents: 'none'
-            });
-            document.body.appendChild(container);
-        }
-        const iconMap = { success: 'ph-check-circle', danger: 'ph-warning-circle', info: 'ph-info', warning: 'ph-warning' };
-        const colorMap = { success: 'var(--success)', danger: 'var(--danger)', info: 'var(--primary)', warning: '#d97706' };
-        const toast = document.createElement('div');
-        toast.style.cssText = `background:var(--bg-surface);border:1px solid var(--border-color);border-left:4px solid ${colorMap[type]||colorMap.info};padding:1rem 1.25rem;border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);display:flex;align-items:flex-start;gap:0.75rem;pointer-events:all;animation:slideUpFade 0.3s ease-out;`;
-        toast.innerHTML = `<i class="ph-fill ${iconMap[type]||iconMap.info}" style="color:${colorMap[type]||colorMap.info};font-size:1.2rem;flex-shrink:0;margin-top:1px;"></i><span style="font-size:0.88rem;color:var(--text-main);flex:1;line-height:1.5;">${escapeHtml(message)}</span><i class="ph ph-x" style="cursor:pointer;color:var(--text-muted);font-size:0.9rem;flex-shrink:0;" onclick="this.closest('div').remove()"></i>`;
-        container.appendChild(toast);
-        setTimeout(() => { if (toast.parentElement) toast.remove(); }, duration);
-    }
-
-    /**
-     * Non-blocking confirm dialog. Replaces native confirm().
-     * @param {string} message - Question to ask
-     * @param {function} onConfirm - Called when user clicks confirm
-     * @param {function} [onCancel] - Called when user clicks cancel
-     */
-    function showConfirm(message, onConfirm, onCancel) {
-        const overlay = document.createElement('div');
-        overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;`;
-        overlay.innerHTML = `
-            <div style="background:var(--bg-surface);border-radius:var(--radius-md);padding:2rem;max-width:420px;width:90%;box-shadow:var(--shadow-lg);border:1px solid var(--border-color);">
-                <div style="display:flex;align-items:flex-start;gap:1rem;margin-bottom:1.5rem;">
-                    <i class="ph-fill ph-warning-circle" style="color:var(--danger);font-size:1.5rem;flex-shrink:0;margin-top:2px;"></i>
-                    <p style="margin:0;color:var(--text-main);font-size:0.95rem;line-height:1.6;">${escapeHtml(message)}</p>
-                </div>
-                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
-                    <button id="_cancelBtn" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:1px solid var(--border-color);background:var(--bg-main);color:var(--text-main);cursor:pointer;font-size:0.875rem;">Cancel</button>
-                    <button id="_confirmBtn" style="padding:0.6rem 1.25rem;border-radius:var(--radius-sm);border:none;background:var(--danger);color:#fff;cursor:pointer;font-size:0.875rem;font-weight:600;">Confirm</button>
-                </div>
-            </div>`;
-        document.body.appendChild(overlay);
-        overlay.querySelector('#_confirmBtn').onclick = () => { overlay.remove(); onConfirm(); };
-        overlay.querySelector('#_cancelBtn').onclick = () => { overlay.remove(); if (onCancel) onCancel(); };
-        overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); if (onCancel) onCancel(); } };
-    }
+    // --- Utilities (Imported via ES6 Modules) ---
 
     /**
      * Non-blocking prompt dialog. Replaces native prompt().
@@ -157,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ],
         types: ['Sale', 'Rent'],
         categories: Object.keys(PROPERTY_METADATA),
-        statuses: ['Available', 'Pending', 'Rented', 'Sold'],
+        statuses: ['Available', 'Rented', 'Sold'],
         bhkLayouts: ['Studio', '1 BHK', '2 BHK', '3 BHK', '4+ BHK']
     };
 
@@ -243,6 +200,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginRoleCards = document.querySelectorAll('#loginRoleSelector .role-card');
     const selectedRoleInput = document.getElementById('selectedRole');
     const loginErrorMsg = document.getElementById('loginErrorMsg');
+
+    let formApi = null;
+    setTimeout(() => {
+        formApi = initForms({
+            currentUser, EstatoStorage, FILTER_CONFIG, propertyForm, propertyModal,
+            modalTitle, propImageFile, imagePreviewContainer, propImageHidden,
+            renderView, currentView, searchInput, citiesListDropdown
+        });
+        window.openModal = formApi.openModal;
+        window.closeModal = formApi.closeModal;
+        propertyForm.addEventListener('submit', formApi.handleFormSubmit);
+        formApi.populateCitiesDatalist();
+    }, 500);
 
     const navItems = document.querySelectorAll('.nav-item:not(.title-divider)');
     const viewContainer = document.getElementById('viewContainer');
@@ -821,7 +791,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Disabled closing on outside click to prevent accidental form wiping
         });
 
-        propertyForm.addEventListener('submit', handleFormSubmit);
+
 
         function compressImage(file, maxWidth = 1200, quality = 0.75) {
             return new Promise((resolve, reject) => {
@@ -1298,229 +1268,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Views ---
     function renderDashboard() {
-        const stats = EstatoStorage.getStats();
-        // Seller sees only their own, Admin sees all
-        const allProps = EstatoStorage.getProperties();
-        let recentProps = allProps;
-        if (!currentUser) return;
-        if (currentUser.role === 'Seller') {
-            recentProps = recentProps.filter(p => p.ownerId === currentUser.id);
-        }
-        recentProps = recentProps.slice(-3).reverse();
-
-        let html = `
-            <div class="section-header">
-                <h2>My Listings Performance</h2>
-                <div style="color: var(--text-muted); font-weight: 500;">
-                    ${new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </div>
-            </div>
-
-            <div class="dashboard-valuation">
-                <h4>Total Valuation of My Listings</h4>
-                <p>${currencyFormatter.format(stats.totalValue)}</p>
-            </div>
-
-            <div class="stats-grid">
-                <div class="stat-card surface-panel"><div class="stat-icon"><i class="ph ph-buildings"></i></div><div class="stat-info"><h4>My Properties</h4><p>${stats.totalProperties}</p></div></div>
-                <div class="stat-card surface-panel"><div class="stat-icon"><i class="ph ph-map-pin"></i></div><div class="stat-info"><h4>Cities Covered</h4><p>${stats.totalCities}</p></div></div>
-                <div class="stat-card surface-panel"><div class="stat-icon" style="background: #ecfdf5; color: #10b981;"><i class="ph ph-tag"></i></div><div class="stat-info"><h4>For Sale</h4><p>${stats.forSale}</p></div></div>
-                <div class="stat-card surface-panel"><div class="stat-icon" style="background: #fdf2f8; color: #db2777;"><i class="ph ph-key"></i></div><div class="stat-info"><h4>For Rent</h4><p>${stats.forRent}</p></div></div>
-            </div>
-
-            <!-- Analytics Grid -->
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-                <div class="chart-container surface-panel" style="height: 350px;">
-                    <h4 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Properties per Region</h4>
-                    <div style="flex: 1; min-height: 0;"><canvas id="cityCountChart"></canvas></div>
-                </div>
-                <div class="chart-container surface-panel" style="height: 350px;">
-                    <h4 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Avg Price per Region</h4>
-                    <div style="flex: 1; min-height: 0;"><canvas id="cityPriceChart"></canvas></div>
-                </div>
-                <div class="chart-container surface-panel" style="height: 350px; display: flex; flex-direction: column;">
-                    <h4 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Type Distribution</h4>
-                    <div style="flex: 1; min-height: 0;"><canvas id="typeDistChart"></canvas></div>
-                </div>
-            </div>
-
-            <div class="section-header" style="margin-top: 2rem;">
-                <h3>Recent Listings</h3>
-            </div>
-            <div class="grid-layout">
-                ${recentProps.length ? recentProps.map((p, i) => generatePropertyCard(p, i)).join('') : '<div class="empty-state"><p>No properties found.</p></div>'}
-            </div>
-
-            ${currentUser.role === 'Admin' ? `
-                <div class="section-header" style="margin-top: 3rem;">
-                    <h3><i class="ph-duotone ph-clock"></i> Pending Approvals</h3>
-                </div>
-                ${allProps.filter(p => p.status === 'Pending').length > 0 ? `
-                <div class="recent-scroll-container" style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1.5rem; margin-bottom: 2rem;">
-                    ${allProps.filter(p => p.status === 'Pending').map((p, i) => `<div style="min-width: 300px;">${generatePropertyCard(p, i)}</div>`).join('')}
-                </div>
-                ` : `
-                <div class="surface-panel" style="padding: 2rem; text-align: center; border: 1px dashed var(--border-color); color: var(--text-muted); margin-bottom: 2rem;">
-                    <i class="ph-duotone ph-check-circle" style="font-size: 3rem; color: var(--success); margin-bottom: 1rem;"></i>
-                    <p>All caught up! There are no listings pending approval.</p>
-                </div>
-                `}
-                <div class="card-separator"></div>
-
-                <div class="section-header" style="margin-top: 2rem;">
-                    <h3>Developer & Admin Tools</h3>
-                </div>
-                <div class="surface-panel" style="padding: 1.5rem; display: flex; align-items: center; justify-content: space-between; border: 1px dashed var(--border-color); background: var(--bg-hover); margin-bottom: 1rem;">
-                    <div>
-                        <h4 style="margin: 0 0 5px 0;">Property Data Generator</h4>
-                        <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">Instantly seed 1 realistic, high-quality property listing for testing.</p>
-                    </div>
-                    <button class="btn btn-secondary shadow-hover" id="seedDataBtn" style="background: white; border: 1px solid var(--border-color);">
-                        <i class="ph ph-database"></i> Seed 1 Property
-                    </button>
-                </div>
-
-                <div class="surface-panel" style="padding: 1.5rem; display: flex; align-items: center; justify-content: space-between; border: 1px dashed var(--border-color); background: var(--bg-hover);">
-                    <div>
-                        <h4 style="margin: 0 0 5px 0;">Data Portability</h4>
-                        <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">Backup your entire marketplace state or restore from a previous JSON dump.</p>
-                    </div>
-                    <div style="display: flex; gap: 0.75rem;">
-                        <button class="btn btn-secondary shadow-hover" id="backupDataBtn" style="background: white; border: 1px solid var(--border-color);">
-                            <i class="ph ph-download"></i> Backup Data
-                        </button>
-                        <button class="btn btn-secondary shadow-hover" id="restoreDataBtn" style="background: white; border: 1px solid var(--border-color);">
-                            <i class="ph ph-upload"></i> Restore Data
-                        </button>
-                    </div>
-                    <input type="file" id="restoreFilePicker" accept=".json" style="display: none;">
-                </div>
-            ` : ''}
-        `;
-
-        if (currentUser.role === 'Admin') {
-            html += renderAdminActivityFeed();
-        }
-
-        viewContainer.innerHTML = html;
-        attachCardListeners();
-
-        // Admin Tools listener
-        const seedBtnDashboard = document.getElementById('seedDataBtn');
-        if (seedBtnDashboard) seedBtnDashboard.addEventListener('click', () => seedDummyData(1));
-
-        const backupBtn = document.getElementById('backupDataBtn');
-        if (backupBtn) backupBtn.addEventListener('click', () => exportBackup());
-
-        const restoreBtn = document.getElementById('restoreDataBtn');
-        const restoreInput = document.getElementById('restoreFilePicker');
-        if (restoreBtn && restoreInput) {
-            restoreBtn.addEventListener('click', () => restoreInput.click());
-            restoreInput.addEventListener('change', (e) => {
-                const file = e.target.files[0];
-                if (file) handleRestore(file);
-            });
-        }
-
-        // Initialize Charts
-        const cityLabels = Object.keys(stats.avgPriceByCity);
-        const cityCounts = cityLabels.map(city => {
-            const props = EstatoStorage.getProperties().filter(p => p.city === city);
-            return (currentUser.role === 'Seller') ? props.filter(p => p.ownerId === currentUser.id).length : props.length;
+        const viewContainer = document.getElementById('viewContainer');
+        externalRenderDashboard({
+            currentUser, EstatoStorage, viewContainer, dashboardCharts, currencyFormatter,
+            generatePropertyCard, Chart: window.Chart, attachCardListeners,
+            seedDummyData: window.seedDummyData, exportBackup, handleRestore, renderAdminActivityFeed
         });
-
-        // 1. City Count Chart
-        const ctxCount = document.getElementById('cityCountChart');
-        if (ctxCount) {
-            dashboardCharts.push(new Chart(ctxCount, {
-                type: 'bar',
-                data: {
-                    labels: cityLabels,
-                    datasets: [{
-                        label: 'Listings',
-                        data: cityCounts,
-                        backgroundColor: '#ea580c',
-                        borderRadius: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { beginAtZero: true, ticks: { stepSize: 1, color: '#7d746d' }, grid: { color: '#e5e0d8' } },
-                        x: { ticks: { color: '#7d746d' }, grid: { display: false } }
-                    }
-                }
-            }));
-        }
-
-        // 2. City Price Chart
-        const ctxPrice = document.getElementById('cityPriceChart');
-        if (ctxPrice) {
-            dashboardCharts.push(new Chart(ctxPrice, {
-                type: 'bar',
-                data: {
-                    labels: cityLabels,
-                    datasets: [{
-                        label: 'Avg Price',
-                        data: Object.values(stats.avgPriceByCity),
-                        backgroundColor: '#0ea5e9',
-                        borderRadius: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { 
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: { label: (ctx) => currencyFormatter.format(ctx.raw) }
-                        }
-                    },
-                    scales: {
-                        y: { 
-                            beginAtZero: true, 
-                            ticks: { 
-                                color: '#7d746d',
-                                callback: (val) => val >= 10000000 ? (val/10000000).toFixed(1) + ' Cr' : val >= 100000 ? (val/100000).toFixed(0) + ' L' : val
-                            }, 
-                            grid: { color: '#e5e0d8' } 
-                        },
-                        x: { ticks: { color: '#7d746d' }, grid: { display: false } }
-                    }
-                }
-            }));
-        }
-
-        // 3. Type Distribution Chart
-        const ctxType = document.getElementById('typeDistChart');
-        if (ctxType) {
-            dashboardCharts.push(new Chart(ctxType, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Sale', 'Rent'],
-                    datasets: [{
-                        data: [stats.forSale, stats.forRent],
-                        backgroundColor: ['#ea580c', '#db2777'],
-                        borderWidth: 0,
-                        hoverOffset: 4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } }
-                    },
-                    cutout: '70%'
-                }
-            }));
-        }
-
-        // Admin Tools Listeners are registered in renderDashboard() — no duplicate needed here.
     }
-
     function renderCities() {
         const properties = EstatoStorage.getProperties();
         const cities = EstatoStorage.getCities();
@@ -1955,101 +1709,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderMessages() {
-        let inquiries = EstatoStorage.getInquiries();
-
-        // Role-based inquiry visibility:
-        //   Buyers  — EstatoStorage already returns only their own inquiries (filtered by buyerId in loadAllData).
-        //   Sellers — EstatoStorage already returns only inquiries for their listings (filtered by ownerId).
-        //   Admins  — EstatoStorage returns all inquiries; no additional filter needed for oversight.
-        // An extra client-side filter for Sellers keeps the view scoped correctly if needed.
-        if (currentUser.role === 'Seller') {
-            inquiries = inquiries.filter(inq => inq.ownerId === currentUser.id);
-        }
-        
-        inquiries = [...inquiries].reverse(); // Shallow copy to avoid mutating the live _memCache array
-        
-        let headerText = currentUser.role === 'Buyer' ? 'My Inquiries' : 'Inbound Leads';
-        let html = `<div class="section-header"><h2>${headerText}</h2></div>`;
-        
-        if (inquiries.length === 0) {
-            html += `<div class="empty-state"><i class="ph-duotone ph-envelope-open" style="font-size: 4rem; color: #cbd5e1; margin-bottom: 1rem; display: block;"></i><p>No messages yet. Keep publishing great listings to attract buyers!</p></div>`;
-        } else {
-            html += `<div class="analytics-grid" style="grid-template-columns: 1fr;">`;
-            html += inquiries.map(inq => {
-                let repliesHtml = '';
-                if (inq.replies && inq.replies.length > 0) {
-                    repliesHtml = '<div class="chat-history" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">';
-                    inq.replies.forEach(reply => {
-                        const isMe = reply.senderId === currentUser.id;
-                        repliesHtml += `
-                            <div style="display: flex; gap: 0.75rem; flex-direction: ${isMe ? 'row-reverse' : 'row'}; align-items: flex-end;">
-                                <div class="avatar" style="width: 30px; height: 30px; min-width: 30px; background: var(--border-color); display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.8rem; font-weight: bold; color: var(--text-main);">${reply.senderName.charAt(0)}</div>
-                                <div style="background: ${isMe ? 'var(--primary-light)' : 'var(--bg-main)'}; color: ${isMe ? 'var(--primary)' : 'var(--text-main)'}; padding: 0.75rem 1rem; border-radius: 1rem; border-bottom-${isMe ? 'right' : 'left'}-radius: 0; font-size: 0.9rem; border: 1px solid ${isMe ? 'rgba(234, 88, 12, 0.2)' : 'var(--border-color)'}; max-width: 80%;">
-                                    <div style="font-weight: bold; font-size: 0.75rem; margin-bottom: 0.25rem;">${escapeHtml(reply.senderName)} <span style="font-weight: normal; color: var(--text-muted); margin-left: 0.5rem;">${new Date(reply.date).toLocaleString('en-IN', { timeStyle: 'short', dateStyle: 'short'})}</span></div>
-                                    ${escapeHtml(reply.message)}
-                                </div>
-                            </div>
-                        `;
-                    });
-                    repliesHtml += '</div>';
-                }
-
-                return `
-                <div class="message-card surface-panel">
-                    <div class="message-header">
-                        <div class="message-buyer">
-                            <div class="avatar" style="background: var(--primary-light); color: var(--primary); width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700;">${inq.buyerName.charAt(0)}</div>
-                            <div>
-                                <h4 style="margin: 0; font-size: 1.1rem;">${escapeHtml(inq.buyerName)}</h4>
-                                <p style="margin: 2px 0 0 0; font-size: 0.85rem; color: var(--text-muted);">${escapeHtml(inq.buyerEmail)}</p>
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 0.75rem; align-items: center;">
-                            <div class="message-property"><i class="ph-duotone ph-buildings"></i> ${escapeHtml(inq.propertyTitle)}</div>
-                            <button class="btn btn-icon shadow-hover open-reply-btn" data-id="${inq.id}" title="Reply in Chat" style="background: var(--primary-light); color: var(--primary); display: inline-flex; align-items: center; justify-content: center;">
-                                <i class="ph ph-chat-text"></i>
-                            </button>
-                            <button class="btn btn-icon btn-danger-soft delete-inq-btn shadow-hover" data-id="${inq.id}" title="Delete Inquiry">
-                                <i class="ph ph-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="message-body" style="background: var(--bg-hover); padding: 1.25rem; border-radius: var(--radius-sm); margin: 1rem 0; border-left: 4px solid var(--primary); font-style: italic; color: var(--text-main);">
-                        "${escapeHtml(inq.message)}"
-                    </div>
-                    ${repliesHtml}
-                    <div style="text-align: right; font-size: 0.8rem; color: var(--text-muted); font-weight: 500; margin-top: 1rem;">
-                        <i class="ph ph-clock"></i> Started: ${new Date(inq.date).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
-                    </div>
-                </div>
-            `}).join('');
-            html += `</div>`;
-        }
-        viewContainer.innerHTML = html;
-        
-        document.querySelectorAll('.open-reply-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const inqId = e.currentTarget.getAttribute('data-id');
-                document.getElementById('replyInqId').value = inqId;
-                document.getElementById('replyModal').classList.add('active');
-            });
-        });
-
-        document.querySelectorAll('.delete-inq-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const inqId = e.currentTarget.getAttribute('data-id');
-                const btn = e.currentTarget;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i>';
-                showConfirm('Delete this inquiry? This cannot be undone.', () => {
-                    EstatoStorage.deleteInquiry(inqId);
-                    renderMessages();
-                }, () => {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="ph ph-trash"></i>';
-                });
-            });
-        });
+        const viewContainer = document.getElementById('viewContainer');
+        externalRenderMessages({ currentUser, EstatoStorage, viewContainer });
     }
 
 
@@ -2089,102 +1750,18 @@ document.addEventListener('DOMContentLoaded', () => {
         `).join('');
     }
 
-    // --- Component Generators ---
+    // --- Component Generators (Bridged to pure ES6 modules) ---
     function generatePropertyCard(prop, index = 0, distance = null) {
-        const isSale = prop.type === 'Sale';
-        const badgeClass = isSale ? 'sale' : 'rent';
-        
-        const favs = EstatoStorage.getFavorites();
-        const isFav = favs.includes(prop.id);
-        const mapHref = `https://maps.google.com/?q=${encodeURIComponent(prop.address + ', ' + prop.city)}`;
-        
-        const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
-        const images = rawImgArray.map(url => window.formatEstatoImage(url));
-            
-        // RBAC Context Rendering: Seller sees own, Admin sees all
-        const role = currentUser ? currentUser.role : 'Buyer';
-        const userId = currentUser ? currentUser.id : null;
-        const isOwnerOfListing = (role === 'Seller' && prop.ownerId === userId) || role === 'Admin';
-
-        const carouselHTML = `
-            <div class="image-carousel">
-                ${images.map(img => `<div class="carousel-slide"><img src="${img}" alt="${prop.title}" loading="lazy" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;"></div>`).join('')}
-            </div>
-            ${images.length > 1 ? `
-                <div class="carousel-indicators">
-                    ${images.map((_, i) => `<div class="carousel-dot ${i===0?'active':''}"></div>`).join('')}
-                </div>
-            ` : ''}
-        `;
-
-        const ratingData = EstatoStorage.getAverageRating(prop.id);
-        const ratingHTML = ratingData.count > 0 ? `
-            <div class="rating-badge" title="${ratingData.average} average based on ${ratingData.count} reviews">
-                <i class="ph-fill ph-star" style="color: #fbbf24;"></i>
-                <span>${ratingData.average}</span>
-                <span class="count">(${ratingData.count})</span>
-            </div>
-        ` : '';
-
-        return `
-            <div class="property-card" style="animation-delay: ${index * 0.05}s" onclick="window.dispatchCardClick('${prop.id}')">
-                <div class="card-img">
-                    ${carouselHTML}
-                    <div class="badges">
-                        ${prop.category ? `<span class="badge" style="background: var(--${PROPERTY_METADATA[prop.category]?.color || 'primary'}); color: white;"><i class="${PROPERTY_METADATA[prop.category]?.icon || 'ph-house'}"></i> ${prop.category}</span>` : ''}
-                        <span class="badge ${badgeClass}">${prop.type}</span>
-                        <span class="badge" style="background: rgba(44,40,37,0.85); color: white;">${prop.status}</span>
-                        ${distance !== null ? `<span class="badge" style="background: var(--success); color: white; border: none;"><i class="ph ph-navigation-arrow"></i> ${distance.toFixed(1)} km</span>` : ''}
-                    </div>
-                    ${ratingHTML}
-                    <button class="fav-float-btn compare-btn ${compareList.find(p => p.id === prop.id) ? 'active btn-primary' : ''}" onclick="window.toggleCompare('${prop.id}', event)" title="Compare Property" style="right: 3.5rem;">
-                        <i class="ph ph-scales"></i>
-                    </button>
-                    <button class="fav-float-btn fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}" title="Save to My Properties">
-                        <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
-                    </button>
-                </div>
-                <div class="card-content">
-                    <div class="card-price">
-                        ${currencyFormatter.format(prop.price)}
-                        <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">${!isSale ? '/ mo' : ''}</span>
-                    </div>
-                    
-                    <div class="card-metrics">
-                        <div class="metric"><i class="ph-duotone ph-bed"></i> ${prop.bhk || 'N/A'}</div>
-                        <div class="metric"><i class="ph-duotone ph-ruler"></i> ${prop.area ? prop.area.toLocaleString('en-IN') : '--'} sq.ft</div>
-                    </div>
-
-                    <div class="card-title">${escapeHtml(prop.title)}</div>
-                    ${prop.projectName ? `<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 0.25rem;"><i class="ph ph-buildings"></i> ${escapeHtml(prop.projectName)}</div>` : ''}
-                    <div class="card-location"><i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}</div>
-                    
-                    <div class="card-separator"></div>
-                    
-                    <div class="card-actions">
-                        <button class="btn btn-secondary btn-icon shadow-hover pdf-btn" data-id="${prop.id}" title="Download Flyer">
-                            <i class="ph ph-file-pdf"></i>
-                        </button>
-                        <button class="btn btn-secondary btn-icon shadow-hover reviews-btn" data-id="${prop.id}" title="See Reviews">
-                            <i class="ph-duotone ph-star"></i>
-                        </button>
-                        <a href="${mapHref}" target="_blank" class="btn btn-secondary btn-icon shadow-hover" title="View on Map" onclick="event.stopPropagation()">
-                            <i class="ph ph-map-pin-line"></i>
-                        </a>
-                        ${(role === 'Admin' && prop.status === 'Pending') ? `
-                            <button class="btn approve-btn shadow-hover" data-id="${prop.id}" style="flex: 1; background: var(--success); color: white; border: none;"><i class="ph-fill ph-check-circle"></i> Approve</button>
-                            <button class="btn btn-danger reject-btn shadow-hover" data-id="${prop.id}" style="flex: 1;"><i class="ph-fill ph-x-circle"></i> Reject</button>
-                        ` : isOwnerOfListing ? `
-                            <button class="btn btn-secondary edit-btn shadow-hover" data-id="${prop.id}" style="flex: 1;">Edit</button>
-                            <button class="btn btn-danger btn-icon delete-btn shadow-hover" data-id="${prop.id}" title="Delete Listing"><i class="ph ph-trash"></i></button>
-                        ` : `
-                            <button class="btn btn-secondary shadow-hover trend-btn" data-id="${prop.id}" title="Price History"><i class="ph ph-chart-line"></i></button>
-                            <button class="btn btn-primary shadow-hover contact-btn" data-id="${prop.id}" data-owner="${prop.ownerId}" data-title="${escapeHtml(prop.title)}" style="flex: 1.2;" title="Message Seller Securely"><i class="ph ph-envelope-simple"></i> Contact</button>
-                        `}
-                    </div>
-                </div>
-            </div>
-        `;
+        return coreGenerateCard(prop, {
+            currentUser,
+            compareList,
+            favorites: EstatoStorage.getFavorites(),
+            ratingData: EstatoStorage.getAverageRating(prop.id),
+            index,
+            distance,
+            formatPrice: (p) => currencyFormatter.format(p),
+            formatImage: window.formatEstatoImage
+        });
     }
 
     function renderRecentlyViewed() {
@@ -2194,7 +1771,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const properties = recentIds
             .map(id => EstatoStorage.getPropertyById(id))
-            .filter(p => p); // Remove nulls if a property was deleted
+            .filter(p => p);
 
         if (properties.length === 0) return '';
 
@@ -2222,31 +1799,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getSimilarProperties(property) {
-        const all = EstatoStorage.getProperties().filter(p => p.id !== property.id);
-        
-        const scored = all.map(p => {
-            let score = 0;
-            if (p.category === property.category) score += 40;
-            if (p.type === property.type) score += 30;
-            if (p.bhk === property.bhk) score += 20;
-            if (p.city === property.city) score += 50;
-            
-            // Project bonus
-            if (p.projectName && property.projectName && p.projectName === property.projectName) score += 60;
-
-            // Recency weighting
-            const hoursOld = (Date.now() - (p.date ? new Date(p.date).getTime() : 0)) / (1000 * 3600);
-            if (hoursOld < 24) score += 15;
-            else if (hoursOld < 168) score += 5;
-
-            return { prop: p, score };
-        });
-
-        return scored
-            .filter(item => item.score > 50)
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 4)
-            .map(item => item.prop);
+        return coreSimilarProps(property, EstatoStorage.getProperties());
     }
 
     // --- Export Functions ---
@@ -2335,128 +1888,8 @@ document.addEventListener('DOMContentLoaded', () => {
         doc.save(`estato_listings_${new Date().toISOString().slice(0,10)}.pdf`);
     }
 
-    async function reverseGeocode(lat, lng) {
-        try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-            const data = await res.json();
-            if (data && data.address) {
-                const road = data.address.road || data.address.suburb || data.address.neighbourhood || '';
-                const city = data.address.city || data.address.town || data.address.state_district || '';
-                const postcode = data.address.postcode || '';
-                
-                if (road) document.getElementById('propAddress').value = road;
-                if (city) document.getElementById('propCity').value = city;
-                if (postcode) document.getElementById('propPinCode').value = postcode;
-            }
-        } catch (e) {
-            console.error("Geocoding failed", e);
-        }
-    }
+    // Legacy map functions removed in favor of modular map-engine.js
 
-    function initModalMap(lat, lng) {
-        const container = document.getElementById('modalMap');
-        if (!container) return;
-
-        container.style.display = 'block';
-
-        const hasLocation = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
-        const centerLat = hasLocation ? parseFloat(lat) : 20.5937;
-        const centerLng = hasLocation ? parseFloat(lng) : 78.9629;
-        const zoom = hasLocation ? 15 : 4;
-
-        if (!modalMap) {
-            modalMap = L.map('modalMap', { zoomControl: true }).setView([centerLat, centerLng], zoom);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; CartoDB',
-                subdomains: 'abcd',
-                maxZoom: 20
-            }).addTo(modalMap);
-
-            // Click-to-pin: place / move marker on map click
-            modalMap.on('click', (e) => {
-                const newLat = e.latlng.lat.toFixed(6);
-                const newLng = e.latlng.lng.toFixed(6);
-                document.getElementById('propLat').value = newLat;
-                document.getElementById('propLng').value = newLng;
-                updateModalMarker(newLat, newLng);
-                reverseGeocode(newLat, newLng);
-                // Hide instruction tooltip once location is chosen
-                const tip = document.getElementById('mapClickTip');
-                if (tip) tip.style.display = 'none';
-            });
-
-            // Instructional overlay — shown only when no location is set yet
-            if (!hasLocation) {
-                const tip = document.createElement('div');
-                tip.id = 'mapClickTip';
-                tip.innerHTML = '<i class="ph ph-map-pin-line"></i>&nbsp;Click anywhere on the map to pin property location';
-                Object.assign(tip.style, {
-                    position: 'absolute', top: '10px', left: '50%',
-                    transform: 'translateX(-50%)',
-                    background: 'rgba(234,88,12,0.92)', color: 'white',
-                    padding: '6px 14px', borderRadius: '20px',
-                    fontSize: '0.78rem', fontWeight: '600',
-                    zIndex: '1000', pointerEvents: 'none',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-                    whiteSpace: 'nowrap', letterSpacing: '0.01em',
-                    animation: 'mapTipPulse 2s ease-in-out infinite'
-                });
-                container.style.position = 'relative';
-                container.appendChild(tip);
-            }
-        } else {
-            modalMap.setView([centerLat, centerLng], zoom);
-            // Show/hide tip based on whether we have coords
-            const tip = document.getElementById('mapClickTip');
-            if (tip) tip.style.display = hasLocation ? 'none' : '';
-        }
-
-        setTimeout(() => { modalMap.invalidateSize(); }, 100);
-
-        // Only place a marker when we have real coordinates
-        if (hasLocation) {
-            updateModalMarker(centerLat, centerLng);
-        }
-    }
-
-    function updateModalMarker(lat, lng) {
-        if (lat === null || lat === undefined || lng === null || lng === undefined) return;
-        const fLat = parseFloat(lat);
-        const fLng = parseFloat(lng);
-        if (isNaN(fLat) || isNaN(fLng)) return;
-
-        if (modalMarker) {
-            modalMarker.setLatLng([fLat, fLng]);
-            // Pan map to marker so user sees the pin
-            if (modalMap) modalMap.panTo([fLat, fLng]);
-        } else {
-            if (!modalMap) return;
-            modalMarker = L.marker([fLat, fLng], {
-                draggable: true,
-                title: 'Drag to fine-tune exact location'
-            }).addTo(modalMap);
-
-            // Drag end: sync inputs + reverse geocode
-            modalMarker.on('dragend', (e) => {
-                const pos = e.target.getLatLng();
-                const newLat = pos.lat.toFixed(6);
-                const newLng = pos.lng.toFixed(6);
-                document.getElementById('propLat').value = newLat;
-                document.getElementById('propLng').value = newLng;
-                reverseGeocode(newLat, newLng);
-            });
-
-            // Drag start: show a helpful tooltip
-            modalMarker.on('dragstart', () => {
-                modalMarker.bindTooltip('Release to set location', {
-                    permanent: true, className: 'map-drag-tooltip', offset: [0, -30]
-                }).openTooltip();
-            });
-            modalMarker.on('dragend', () => {
-                modalMarker.unbindTooltip();
-            });
-        }
-    }
 
     // --- V11 Interactive Map Logic ---
     function initMap() {
@@ -2477,39 +1910,20 @@ document.addEventListener('DOMContentLoaded', () => {
         updateMapMarkers();
     }
 
+    // window.toggleMapView is bridged from the map-engine module
     window.toggleMapView = function(showMap) {
-        if (currentView !== 'properties') {
-            console.warn('toggleMapView: currentView is', currentView, '— skipping');
-            return;
-        }
-
         isMapVisible = showMap;
-        const grid    = document.getElementById('propertiesGrid');
-        const mapCont = document.getElementById('mapContainer');
-        const gridBtn = document.getElementById('viewGridBtn');
-        const mapBtn  = document.getElementById('viewMapBtn');
-
-        if (!grid)    { console.error('toggleMapView: #propertiesGrid not in DOM'); return; }
-        if (!mapCont) { console.error('toggleMapView: #mapContainer not in DOM');   return; }
-
-        // Use inline style so no CSS specificity can block us
-        if (showMap) {
-            grid.style.display    = 'none';
-            mapCont.style.display = 'block';
-            if (gridBtn) { gridBtn.classList.remove('active'); }
-            if (mapBtn)  { mapBtn.classList.add('active'); }
-            setTimeout(() => {
-                initMap();
-                if (map) map.invalidateSize();
-                updateMapMarkers();
-            }, 150);
-        } else {
-            grid.style.display    = '';
-            mapCont.style.display = 'none';
-            if (gridBtn) { gridBtn.classList.add('active'); }
-            if (mapBtn)  { mapBtn.classList.remove('active'); }
-        }
-    }
+        toggleMapView(showMap, {
+            filterCity: currentFilterCity,
+            currentView,
+            onInitMap: () => initMap(currentFilterCity),
+            onUpdateMarkers: () => {
+                const props = _getFilteredProperties();
+                updateMapMarkers(props, currentFilterCity, currentRadiusCenter, currentRadiusKm,
+                    null, (p) => currencyFormatter.format(p), window.formatEstatoImage);
+            }
+        });
+    };
 
     function updateMapMarkers() {
         if (!map) return;
@@ -2628,8 +2042,22 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             compareList.splice(index, 1);
         }
+        
         updateCompareTray();
         saveCompareState();
+        syncCompareButtons(); // Ensure grid buttons match current list
+    }
+
+    function syncCompareButtons() {
+        document.querySelectorAll('.compare-btn').forEach(btn => {
+            const id = btn.getAttribute('data-id');
+            const inList = compareList.some(p => p.id === id);
+            if (inList) {
+                btn.classList.add('active', 'btn-primary');
+            } else {
+                btn.classList.remove('active', 'btn-primary');
+            }
+        });
     }
 
     function saveCompareState() {
@@ -2670,6 +2098,7 @@ document.addEventListener('DOMContentLoaded', () => {
         compareList = [];
         saveCompareState();
         updateCompareTray();
+        syncCompareButtons();
     };
 
     function renderComparisonTable() {
@@ -2912,6 +2341,14 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
+                
+                // Immediate visual feedback for better perceived performance
+                const icon = btn.querySelector('i');
+                const isNowFav = btn.classList.toggle('active');
+                if (icon) {
+                    icon.className = isNowFav ? 'ph-fill ph-heart' : 'ph ph-heart';
+                }
+                
                 EstatoStorage.toggleFavorite(id);
             });
         });
@@ -3006,171 +2443,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Modal Logic ---
-    function openModal(property = null) {
-        if (property) {
-            // Editing: always reset to the loaded property
-            propertyForm.reset();
-            propImageFile.value = '';
-            imagePreviewContainer.style.display = 'none';
-            propImageHidden.value = '';
-        } else {
-            // Adding: Only reset if the OLD form was editing a specific property
-            if (document.getElementById('propId').value !== '') {
-                propertyForm.reset();
-                propImageFile.value = '';
-                imagePreviewContainer.style.display = 'none';
-                propImageHidden.value = '';
-                document.getElementById('propId').value = '';
-            }
-            // If propId is blank, we leave the fields intact intentionally so they don't vanish!
-        }
-
-        // Populate dynamic dropdowns from FILTER_CONFIG
-        const populateSelect = (id, options, selectedValue) => {
-            const select = document.getElementById(id);
-            if (!select) return;
-            select.innerHTML = options.map(opt => {
-                const val = typeof opt === 'string' ? opt : opt.value;
-                const label = typeof opt === 'string' ? opt : opt.label;
-                return `<option value="${val}" ${val === selectedValue ? 'selected' : ''}>${label}</option>`;
-            }).join('');
-        };
-
-        populateSelect('propType', FILTER_CONFIG.types, property ? property.type : 'Sale');
-        populateSelect('propCategory', FILTER_CONFIG.categories, property ? property.category : 'Apartment');
-        populateSelect('propStatus', FILTER_CONFIG.statuses, property ? property.status : 'Pending');
-        populateSelect('propBhk', FILTER_CONFIG.bhkLayouts, property ? property.bhk : '2 BHK');
-
-        // Hide Status dropdown entirely for Sellers
-        if (currentUser && currentUser.role === 'Seller') {
-            document.getElementById('propStatus').closest('.form-group').style.display = 'none';
-        } else {
-            document.getElementById('propStatus').closest('.form-group').style.display = 'block';
-        }
-        
-        if (property) {
-            modalTitle.textContent = 'Edit Listing';
-            document.getElementById('propId').value = property.id;
-            document.getElementById('propTitle').value = property.title;
-            document.getElementById('propProjectName').value = property.projectName || '';
-            document.getElementById('propCity').value = property.city;
-            document.getElementById('propPrice').value = property.price;
-            document.getElementById('propArea').value = property.area || '';
-            document.getElementById('propAddress').value = property.address;
-            document.getElementById('propDescription').value = property.description || '';
-            
-            const imgs = property.images && property.images.length > 0 ? property.images : (property.image ? [property.image] : []);
-            propImageHidden.value = imgs.length > 0 ? JSON.stringify(imgs) : '';
-            if (window.renderImagePreviews) window.renderImagePreviews();
-
-            // Restore location fields
-            document.getElementById('propPinCode').value = property.pinCode || '';
-            document.getElementById('propLat').value = property.lat || '';
-            document.getElementById('propLng').value = property.lng || '';
-            const gLink = document.getElementById('propGoogleMapsLink');
-            if (gLink) gLink.value = '';
-        } else {
-            modalTitle.textContent = 'Publish New Listing';
-            document.getElementById('propId').value = '';
-        }
-
-        // Always scroll modal body back to top so Title + Image fields are visible
-        const modalBody = propertyModal.querySelector('.modal-body');
-        if (modalBody) modalBody.scrollTop = 0;
-
-        propertyModal.classList.add('active');
-        
-        const currentLat = document.getElementById('propLat').value;
-        const currentLng = document.getElementById('propLng').value;
-        setTimeout(() => {
-            initModalMap(currentLat, currentLng);
-        }, 150);
-    }
-
-    function closeModal() {
-        propertyModal.classList.remove('active');
-        // REMOVED propertyForm.reset() so half-filled forms don't vanish!
-        // Clean up modal marker so next openModal() starts fresh
-        // (the map instance is reused, but the marker state must reset)
-        if (modalMarker && modalMap) {
-            modalMap.removeLayer(modalMarker);
-            modalMarker = null;
-        }
-        // Re-show the click-tip for the next time the modal is opened
-        const tip = document.getElementById('mapClickTip');
-        if (tip) tip.style.display = '';
-    }
-
-    async function handleFormSubmit(e) {
-        e.preventDefault();
-        
-        const id = document.getElementById('propId').value;
-        const title       = document.getElementById('propTitle').value.trim();
-        const projectName = document.getElementById('propProjectName').value.trim();
-        const city        = document.getElementById('propCity').value.trim();
-        const address = document.getElementById('propAddress').value.trim();
-        const price   = Number(document.getElementById('propPrice').value);
-        const pinCode = document.getElementById('propPinCode').value.trim();
-        const lat     = document.getElementById('propLat').value;
-        const lng     = document.getElementById('propLng').value;
-
-        if (!title || !city || !address || !price || !pinCode || !lat || !lng) {
-            showToast('Please fill in all required fields: Title, City, Address, PIN Code, Price, and Location.', 'warning');
-            return;
-        }
-
-        const newProperty = {
-            id: id || undefined,
-            title,
-            projectName,
-            city,
-            price,
-            pinCode,
-            lat: Number(lat),
-            lng: Number(lng),
-            bhk: document.getElementById('propBhk').value,
-            area: Number(document.getElementById('propArea').value) || 0,
-            address,
-            type: document.getElementById('propType').value,
-            status: (currentUser && currentUser.role === 'Admin') ? document.getElementById('propStatus').value : 'Pending',
-            category: document.getElementById('propCategory').value,
-            description: document.getElementById('propDescription').value.trim(),
-            images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
-        };
-
-        // Show loading state on the submit button to prevent double-submits
-        const submitBtn = propertyForm.querySelector('[type="submit"]');
-        const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
-        if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Saving...'; }
-
-        try {
-            if (id) {
-                await EstatoStorage.updateProperty(newProperty);
-                showToast('Listing updated successfully!', 'success');
-            } else {
-                await EstatoStorage.addProperty(newProperty);
-                showToast(currentUser && currentUser.role === 'Admin' ? 'Listing published!' : 'Listing submitted for review!', 'success');
-            }
-            propertyForm.reset();
-            closeModal();
-            populateCitiesDatalist();
-            setActiveNav('properties');
-            currentFilterCity = null;
-            currentSort = 'newest';
-            currentTypeFilter = '';
-            currentStatusFilter = '';
-        } catch(err) {
-            console.error('Form submit failed:', err);
-            showToast('Error saving listing: ' + err.message, 'danger');
-            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHtml; }
-        }
-    }
-
-    function populateCitiesDatalist() {
-        const cities = EstatoStorage.getCities();
-        citiesListDropdown.innerHTML = cities.map(c => `<option value="${c}">`).join('');
-    }
-
     // --- Notifications ---
     function renderNotifications() {
         const notifs = EstatoStorage.getNotifications();
