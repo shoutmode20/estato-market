@@ -66,6 +66,42 @@ export function renderDashboard(ctx) {
             </div>
         </div>
 
+        <!-- NEW: My Listings Preview Secion -->
+        <div class="user-listings-section" style="margin-bottom: 3rem; animation: fadeIn 0.4s ease-out;">
+            <div class="section-header" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 2rem;">
+                <div>
+                    <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem; color: var(--primary);">
+                        <i class="ph ph-house-line"></i> My Managed Listings
+                    </h3>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Quick overview of your current active portfolio.</p>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="window.renderProperties('Properties'); document.getElementById('searchInput').value='${currentUser.id.substring(0,8)}'; document.getElementById('searchInput').dispatchEvent(new Event('input'));">
+                    View All My Listings <i class="ph ph-arrow-right"></i>
+                </button>
+            </div>
+
+            ${(() => {
+                const myItems = EstatoStorage.getProperties().filter(p => p.ownerId === currentUser.id);
+                if (myItems.length === 0) {
+                    return `
+                        <div class="empty-state surface-panel" style="padding: 2.5rem; text-align: center; border: 1px dashed var(--border-color); background: var(--bg-hover);">
+                            <i class="ph ph-buildings" style="font-size: 2rem; color: var(--text-muted); opacity: 0.4; margin-bottom: 1rem;"></i>
+                            <h4 style="margin: 0; color: var(--text-muted);">You haven't listed any properties yet.</h4>
+                            <button class="btn btn-primary btn-sm" style="margin-top: 1rem;" onclick="window.openModal()">Add First Listing</button>
+                        </div>
+                    `;
+                }
+                
+                // Show only first 4 in dashboard for performance/clutter
+                const slice = myItems.slice(0, 4);
+                return `
+                    <div class="admin-queue-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+                        ${slice.map(p => generatePropertyCard(p)).join('')}
+                    </div>
+                `;
+            })()}
+        </div>
+
         ${(currentUser.role === 'Admin') ? `
             <div class="admin-approval-section" style="margin-bottom: 3rem; animation: fadeIn 0.4s ease-out;">
                 <div class="section-header" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;">

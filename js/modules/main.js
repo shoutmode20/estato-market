@@ -220,7 +220,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const notifBadge = document.getElementById('notifBadge');
     const notifDropdown = document.getElementById('notifDropdown');
     const notifList = document.getElementById('notifList');
-    const markReadBtn = document.getElementById('markReadBtn');
 
     // Number Formatter
     const currencyFormatter = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
@@ -570,12 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        if (markReadBtn) {
-            markReadBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                EstatoStorage.markNotificationsRead();
-            });
-        }
+
 
         // Close notifications when clicking elsewhere
         document.addEventListener('click', (e) => {
