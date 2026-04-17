@@ -249,27 +249,33 @@ export const EstatoStorage = {
      */
     async _performInquiryMigration(uid, role) {
         try {
-            // Check both participants (as buyer and as seller)
-            const queries = [
-                db.ref('inquiries').orderByChild('buyerId').equalTo(uid),
-                db.ref('inquiries').orderByChild('ownerId').equalTo(uid)
-            ];
+            console.log("[Storage] Starting Nuclear Discovery for legacy inquiries...");
+            const snap = await db.ref('inquiries').once('value');
+            if (!snap.exists()) return { count: 0, uid, sampleInq: 'none' };
 
-            for (const q of queries) {
-                const snap = await q.once('value');
-                if (snap.exists()) {
-                    const indexUpdates = {};
-                    Object.keys(snap.val()).forEach(inqId => {
-                        indexUpdates[inqId] = true;
-                    });
-                    if (Object.keys(indexUpdates).length > 0) {
-                        console.log(`[Storage] Migrating ${Object.keys(indexUpdates).length} legacy inquiries for ${uid}`);
-                        await db.ref(`user_inquiries/${uid}`).update(indexUpdates);
-                    }
+            const allInquiries = snap.val();
+            const indexUpdates = {};
+            let count = 0;
+            let sampleInq = null;
+
+            Object.entries(allInquiries).forEach(([inqId, inq]) => {
+                if (!sampleInq) sampleInq = { id: inqId, buyerId: inq.buyerId, ownerId: inq.ownerId };
+                // If current user is a participant (Buyer or Owner)
+                if (inq.buyerId === uid || inq.ownerId === uid) {
+                    indexUpdates[inqId] = true;
+                    count++;
                 }
+            });
+
+            if (count > 0) {
+                console.log(`[Storage] Nuclear Discovery found ${count} threads for ${uid}. Indexing now...`);
+                await db.ref(`user_inquiries/${uid}`).update(indexUpdates);
             }
+
+            return { count, uid, sampleInq };
         } catch (e) {
-            console.warn("[Storage] Migration scan failed (expected if rules are restricted):", e.message);
+            console.warn("[Storage] Nuclear Discovery failed:", e.message);
+            throw e;
         }
     },
 
@@ -931,5 +937,4 @@ export const EstatoStorage = {
     }
 };
 window.EstatoStorage = EstatoStorage;
-window.dumpEstatoStorage = () => { console.log("[Debug] Current _memCache:", _memCache); return _memCache; };
 

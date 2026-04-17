@@ -11,8 +11,7 @@ export function renderMessages(ctx) {
                 <p>Direct inquiries and communication thread.</p>
             </div>
             <div style="display: flex; gap: 0.75rem;">
-                <button id="inqDebugBtn" class="btn btn-secondary btn-sm" style="gap: 0.5rem; border-color: var(--primary); color: var(--primary);"><i class="ph ph-bug"></i> Dump Cache</button>
-                <button id="inqSyncBtn" class="btn btn-primary btn-sm" style="gap: 0.5rem;"><i class="ph ph-arrows-clockwise"></i> Sync Messages</button>
+                <button id="inqSyncBtn" class="btn btn-secondary btn-sm" title="Refresh Inbox" style="padding: 0.5rem; border-radius: 50%; width: 36px; height: 36px;"><i class="ph ph-arrows-clockwise"></i></button>
             </div>
         </div>
     `;
@@ -29,12 +28,12 @@ export function renderMessages(ctx) {
         html += `
             <div class="message-threads" style="display: flex; flex-direction: column; gap: 1.5rem;">
                 ${inquiries.map(inq => {
-                    const thread = [
-                        { senderName: inq.buyerName, senderRole: 'Buyer', message: inq.message, date: inq.date || inq.timestamp },
-                        ...(inq.replies || []).map(r => ({ ...r, date: r.date || r.timestamp }))
-                    ];
+            const thread = [
+                { senderName: inq.buyerName, senderRole: 'Buyer', message: inq.message, date: inq.date || inq.timestamp },
+                ...(inq.replies || []).map(r => ({ ...r, date: r.date || r.timestamp }))
+            ];
 
-                    return `
+            return `
                         <div class="surface-panel shadow-sm message-card ${inq.status === 'Unread' ? 'unread-glow' : ''}" style="padding: 1.5rem; transition: transform 0.2s;">
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
                                 <div style="display: flex; gap: 1rem; align-items: center;">
@@ -52,8 +51,8 @@ export function renderMessages(ctx) {
                             
                             <div class="thread-container" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; background: var(--bg-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
                                 ${thread.map(msg => {
-                                    const isMe = (currentUser.role === msg.senderRole);
-                                    return `
+                const isMe = (currentUser.role === msg.senderRole);
+                return `
                                         <div style="display: flex; flex-direction: column; align-items: ${isMe ? 'flex-end' : 'flex-start'};">
                                             <div style="max-width: 85%; padding: 0.75rem 1rem; border-radius: ${isMe ? '15px 15px 2px 15px' : '15px 15px 15px 2px'}; background: ${isMe ? 'var(--primary)' : 'white'}; color: ${isMe ? 'white' : 'var(--text-main)'}; border: ${isMe ? 'none' : '1px solid var(--border-color)'}; font-size: 0.92rem; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                                                 ${escapeHtml(msg.message)}
@@ -63,7 +62,7 @@ export function renderMessages(ctx) {
                                             </div>
                                         </div>
                                     `;
-                                }).join('')}
+            }).join('')}
                             </div>
 
                             <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
@@ -72,7 +71,7 @@ export function renderMessages(ctx) {
                             </div>
                         </div>
                     `;
-                }).join('')}
+        }).join('')}
             </div>
         `;
     }
@@ -91,42 +90,32 @@ export function renderMessages(ctx) {
         });
     });
 
-    // --- Diagnostic Event Listeners ---
+    // --- Refresh Context Trigger ---
     const syncBtn = viewContainer.querySelector('#inqSyncBtn');
-    const debugBtn = viewContainer.querySelector('#inqDebugBtn');
 
     if (syncBtn) {
         syncBtn.addEventListener('click', async () => {
+            const originalIcon = syncBtn.innerHTML;
             syncBtn.disabled = true;
-            syncBtn.innerHTML = '<i class="ph ph-spinner animate-spin"></i> Syncing...';
+            syncBtn.classList.add('animate-spin');
             try {
-                console.log("[Diagnostic] Manually triggering inquiry migration for:", currentUser.id);
                 await EstatoStorage._performInquiryMigration(currentUser.id, currentUser.role);
-                const count = EstatoStorage.getInquiries().length;
-                alert(`Sync Complete!\nFound ${count} message threads in your local cache.\n\nIf this number is > 0 but you see nothing, the issue is CSS/Rendering.\nIf it is 0, the data discovery is still failing.`);
+                showToast("Inbox synchronized with cloud storage.");
             } catch (err) {
-                alert("Sync failed: " + err.message);
+                showToast("Refresh failed: " + err.message, "error");
             } finally {
                 syncBtn.disabled = false;
-                syncBtn.innerHTML = '<i class="ph ph-arrows-clockwise"></i> Sync Messages';
+                syncBtn.classList.remove('animate-spin');
             }
         });
     }
-
-    if (debugBtn) {
-        debugBtn.addEventListener('click', () => {
-            const data = window.dumpEstatoStorage();
-            alert(`Cache Dumped to Console.\n\nTotal Inquiries: ${data.inquiries.length}\nAdmin Role: ${currentUser.role === 'Admin'}\nUID: ${currentUser.id}`);
-        });
-    }
-
-    viewContainer.querySelectorAll('.thread-delete-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const inqId = btn.getAttribute('data-id');
-            showConfirm('Delete this conversation thread permanently?', async () => {
-                await EstatoStorage.deleteInquiry(inqId);
-                renderMessages(ctx);
-            });
+}
+viewContainer.querySelectorAll('.thread-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const inqId = btn.getAttribute('data-id');
+        showConfirm('Delete this conversation thread permanently?', async () => {
+            await EstatoStorage.deleteInquiry(inqId);
+            renderMessages(ctx);
         });
     });
-}
+});

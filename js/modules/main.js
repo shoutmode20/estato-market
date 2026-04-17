@@ -1,19 +1,3 @@
-// --- Global Error Reporting (Diagnostic Mode) ---
-window.onerror = function(msg, url, line, col, error) {
-    console.error("[Crashed] Global Error:", msg, "at", url, ":", line);
-    // Subtle alert for the user during this diagnostic phase
-    const toast = document.createElement('div');
-    toast.style = "position:fixed;bottom:20px;left:20px;background:#ef4444;color:white;padding:12px;border-radius:8px;z-index:10000;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);font-family:sans-serif;font-size:13px;max-width:300px;";
-    toast.innerHTML = `⚠️ <b>App Error:</b> ${msg.split(':')[0]} <br> Check console for details.`;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 7000);
-    return false;
-};
-
-window.onunhandledrejection = function(event) {
-    console.error("[Crashed] Unhandled Promise Rejection:", event.reason);
-};
-
 import { EstatoStorage } from './services/storage.js';
 import { escapeHtml, showToast, showConfirm, debounce } from './ui/utils.js';
 import { State, updateState } from './core/state.js';
