@@ -10,9 +10,6 @@ export function renderMessages(ctx) {
                 <h2>Internal Messaging</h2>
                 <p>Direct inquiries and communication thread.</p>
             </div>
-            <div style="display: flex; gap: 0.75rem;">
-                <button id="inqSyncBtn" class="btn btn-secondary btn-sm" title="Refresh Inbox" style="padding: 0.5rem; border-radius: 50%; width: 36px; height: 36px;"><i class="ph ph-arrows-clockwise"></i></button>
-            </div>
         </div>
     `;
 
@@ -29,7 +26,14 @@ export function renderMessages(ctx) {
             <div class="message-threads" style="display: flex; flex-direction: column; gap: 1.5rem;">
                 ${inquiries.map(inq => {
             const thread = [
-                { senderName: inq.buyerName, senderRole: 'Buyer', message: inq.message, date: inq.date || inq.timestamp },
+                { 
+                    id: 'msg_root',
+                    senderId: inq.buyerId, 
+                    senderName: inq.buyerName, 
+                    senderRole: 'Buyer', 
+                    message: inq.message, 
+                    date: inq.date || inq.timestamp 
+                },
                 ...(inq.replies || []).map(r => ({ ...r, date: r.date || r.timestamp }))
             ];
 
@@ -51,11 +55,14 @@ export function renderMessages(ctx) {
                             
                             <div class="thread-container" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; background: var(--bg-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
                                 ${thread.map(msg => {
-                const isMe = (currentUser.role === msg.senderRole);
+                const isMe = (currentUser.id === msg.senderId);
                 return `
-                                        <div style="display: flex; flex-direction: column; align-items: ${isMe ? 'flex-end' : 'flex-start'};">
-                                            <div style="max-width: 85%; padding: 0.75rem 1rem; border-radius: ${isMe ? '15px 15px 2px 15px' : '15px 15px 15px 2px'}; background: ${isMe ? 'var(--primary)' : 'white'}; color: ${isMe ? 'white' : 'var(--text-main)'}; border: ${isMe ? 'none' : '1px solid var(--border-color)'}; font-size: 0.92rem; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                                        <div style="display: flex; flex-direction: column; align-items: ${isMe ? 'flex-end' : 'flex-start'}; position: relative; group;">
+                                            <div class="message-bubble" style="max-width: 85%; padding: 0.75rem 1rem; border-radius: ${isMe ? '15px 15px 2px 15px' : '15px 15px 15px 2px'}; background: ${isMe ? 'var(--primary)' : 'white'}; color: ${isMe ? 'white' : 'var(--text-main)'}; border: ${isMe ? 'none' : '1px solid var(--border-color)'}; font-size: 0.92rem; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05); position: relative;">
                                                 ${escapeHtml(msg.message)}
+                                                ${isMe ? `
+                                                    <button class="msg-delete-btn" data-inq-id="${inq.id}" data-msg-id="${msg.id}" title="Delete Message" style="position: absolute; top: -8px; left: -20px; background: var(--surface); border: 1px solid var(--border-color); border-radius: 50%; width: 21px; height: 21px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--danger); font-size: 0.75rem; opacity: 0; transition: opacity 0.2s; z-index: 10;"><i class="ph ph-x"></i></button>
+                                                ` : ''}
                                             </div>
                                             <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; padding: 0 4px;">
                                                 ${msg.senderName} • ${new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -66,14 +73,18 @@ export function renderMessages(ctx) {
                             </div>
 
                             <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
-                                <button class="btn btn-secondary shadow-hover thread-delete-btn" data-id="${inq.id}" style="padding: 0.5rem; color: var(--danger);"><i class="ph ph-trash"></i></button>
+                                <button class="btn btn-secondary shadow-hover thread-delete-btn" data-id="${inq.id}" title="Delete Entire Conversation" style="padding: 0.5rem; color: var(--danger);"><i class="ph ph-trash"></i></button>
                                 <button class="btn btn-primary shadow-hover thread-reply-btn" data-id="${inq.id}" data-buyer="${inq.buyerName}" style="gap: 0.5rem; font-size: 0.85rem; padding: 0.5rem 1.25rem;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
                             </div>
                         </div>
                     `;
         }).join('')}
-            </div>
-        `;
+                </div>
+                
+                <style>
+                    .message-bubble:hover .msg-delete-btn { opacity: 1 !important; }
+                </style>
+            `;
     }
 
     viewContainer.innerHTML = html;
@@ -83,39 +94,46 @@ export function renderMessages(ctx) {
         btn.addEventListener('click', () => {
             const inqId = btn.getAttribute('data-id');
             const buyer = btn.getAttribute('data-buyer');
+            
+            const inqIdInput = document.getElementById('replyInqId');
             const targetEl = document.getElementById('replyTargetName');
+            
+            if (inqIdInput) inqIdInput.value = inqId;
             if (targetEl) targetEl.textContent = buyer;
+            
             document.getElementById('replyModal').classList.add('active');
             setTimeout(() => document.getElementById('replyMessage').focus(), 300);
         });
     });
 
-    // --- Refresh Context Trigger ---
-    const syncBtn = viewContainer.querySelector('#inqSyncBtn');
-
-    if (syncBtn) {
-        syncBtn.addEventListener('click', async () => {
-            const originalIcon = syncBtn.innerHTML;
-            syncBtn.disabled = true;
-            syncBtn.classList.add('animate-spin');
-            try {
-                await EstatoStorage._performInquiryMigration(currentUser.id, currentUser.role);
-                showToast("Inbox synchronized with cloud storage.");
-            } catch (err) {
-                showToast("Refresh failed: " + err.message, "error");
-            } finally {
-                syncBtn.disabled = false;
-                syncBtn.classList.remove('animate-spin');
-            }
-        });
-    }
-}
-viewContainer.querySelectorAll('.thread-delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const inqId = btn.getAttribute('data-id');
-        showConfirm('Delete this conversation thread permanently?', async () => {
-            await EstatoStorage.deleteInquiry(inqId);
-            renderMessages(ctx);
+    viewContainer.querySelectorAll('.thread-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const inqId = btn.getAttribute('data-id');
+            showConfirm('Remove this conversation from your view? (It will still be visible to the other person)', async () => {
+                await EstatoStorage.deleteInquiry(inqId);
+            });
         });
     });
-});
+
+    viewContainer.querySelectorAll('.msg-delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const inqId = btn.getAttribute('data-inq-id');
+            const msgId = btn.getAttribute('data-msg-id');
+            const confirmMsg = msgId === 'msg_root' 
+                ? 'Delete the starting message? This will clear the inquiry text for everyone.' 
+                : 'Delete this message for everyone?';
+            
+            showConfirm(confirmMsg, async () => {
+                if (msgId === 'msg_root') {
+                    // Specific handling for root message clear (Optional, we could just block it)
+                    // For now, we'll implement a 'deleteInquiryReply' style for it too if needed.
+                    // But we'll stick to our plan.
+                    await EstatoStorage.deleteInquiryReply(inqId, msgId);
+                } else {
+                    await EstatoStorage.deleteInquiryReply(inqId, msgId);
+                }
+            });
+        });
+    });
+}

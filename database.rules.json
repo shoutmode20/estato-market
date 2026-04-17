@@ -40,7 +40,7 @@
     },
     "notifications": {
       "$uid": {
-        ".read": "auth != null && $uid === auth.uid",
+        ".read": "auth != null",
         ".write": "auth != null"
       }
     },

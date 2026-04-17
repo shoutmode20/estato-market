@@ -30,8 +30,8 @@ export function renderDashboard(ctx) {
             <div class="stat-card">
                 <div class="stat-icon"><i class="ph-duotone ph-currency-inr"></i></div>
                 <div class="stat-info">
-                    <h4>Avg Price</h4>
-                    <p style="font-size: 1.25rem;">${currencyFormatter.format(stats.avgPriceByCity['Mumbai'] || 0)} <small>Mumbai</small></p>
+                    <h4>${currentUser.role === 'Admin' ? 'Market Avg' : 'Portfolio Avg'}</h4>
+                    <p style="font-size: 1.25rem;">${currencyFormatter.format(stats.marketAvg || 0)} <small>Total</small></p>
                 </div>
             </div>
             <div class="stat-card">

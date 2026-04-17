@@ -50,8 +50,11 @@ let _dataChangeListeners = [];
 // Without this, each logout+re-login stacks another layer of duplicate listeners.
 let _listenerHandles = []; // [{ target: refOrQuery, handler: Function }]
 
-function _trackListener(target, handler) {
-    target.on('value', handler);
+function _trackListener(target, handler, errHandler = null) {
+    target.on('value', handler, (err) => {
+        if (errHandler) errHandler(err);
+        else console.warn("[Storage] Unhandled Listener Error:", err.message);
+    });
     _listenerHandles.push({ target, handler });
 }
 
@@ -158,7 +161,8 @@ export const EstatoStorage = {
 
     async loadAllData() {
         if (_listenersInitialized) {
-            console.log('[Estato Firebase] Listeners already active — skipping re-init to prevent stacking.');
+            console.log('[Estato Firebase] Listeners already active — skipping re-init.');
+            if (_syncCallback) _syncCallback('synced');
             return;
         }
         _listenersInitialized = true;
@@ -174,41 +178,68 @@ export const EstatoStorage = {
             _trackListener(db.ref('properties').limitToLast(20), (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
-                this.mergeProperties(latestBatch);
-                this.notifyListeners();
-            });
+                self.mergeProperties(latestBatch);
+                self.notifyListeners();
+            }, (err) => console.error("[Storage] Property Listener Error:", err.message));
 
             // 2. User-specific favorites
             _trackListener(db.ref('favorites/' + uid), (snap) => {
                 _memCache.favorites = snap.exists() ? (snap.val().ids || []) : [];
-                this.notifyListeners();
-            });
+                self.notifyListeners();
+            }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
 
             // 3. Inquiries — use indexed index to maintain strict per-user privacy.
             //    Admin should not be able to read user's private chats.
             console.log(`[Storage] Initializing secure inquiry listener for ${uid} (${role})`);
             const _inquiryCacheMap = new Map();
             _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
-                    console.log(`[Storage] Inquiry index update. Exists: ${snap.exists()}, Count: ${snap.exists() ? Object.keys(snap.val()).length : 0}`);
                     if (!snap.exists()) {
+                        _inquiryCacheMap.clear();
                         _memCache.inquiries = [];
-                        this.notifyListeners();
+                        self.notifyListeners();
                         return;
                     }
-                    const ids = Object.keys(snap.val());
-                    ids.forEach(inqId => {
+                    const indexedIds = Object.keys(snap.val());
+                    
+                    // 1. Remove cached items that are no longer in the user's index (Private Deletion Handled)
+                    for (const inqId of _inquiryCacheMap.keys()) {
+                        if (!indexedIds.includes(inqId)) {
+                            console.log(`[Sync] 🗑️ Removing thread from private view: ${inqId}`);
+                            _inquiryCacheMap.delete(inqId);
+                        }
+                    }
+
+                    // Rebuild cache and notify UI of index changes (Removals or New Threads)
+                    const updateCache = () => {
+                        _memCache.inquiries = Array.from(_inquiryCacheMap.values())
+                            .sort((a,b) => {
+                                const getLatestDate = (inq) => {
+                                    if (inq.replies && inq.replies.length > 0) {
+                                        const last = inq.replies[inq.replies.length - 1];
+                                        return new Date(last.date || last.timestamp);
+                                    }
+                                    return new Date(inq.date || inq.timestamp);
+                                };
+                                return getLatestDate(b) - getLatestDate(a);
+                            });
+                        self.notifyListeners();
+                    };
+
+                    updateCache();
+
+                    // 2. Add listeners for newly indexed items
+                    indexedIds.forEach(inqId => {
                         if (!_inquiryCacheMap.has(inqId)) {
-                            // First time seeing this inquiry: set up a specific listener
-                            _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
+                             console.log(`[Sync] 🔍 Attaching real-time listener to thread: ${inqId}`);
+                             _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
                                 if (inqSnap.exists()) {
-                                    _inquiryCacheMap.set(inqId, inqSnap.val());
+                                    const data = inqSnap.val();
+                                    _inquiryCacheMap.set(inqId, data);
                                 } else {
                                     _inquiryCacheMap.delete(inqId);
                                 }
-                                _memCache.inquiries = Array.from(_inquiryCacheMap.values())
-                                    .sort((a,b) => new Date(b.date || b.timestamp) - new Date(a.date || a.timestamp));
-                                self.notifyListeners();
-                            });
+                                updateCache();
+                            }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
                         }
                     });
                 }, (err) => {
@@ -223,20 +254,20 @@ export const EstatoStorage = {
             // 4. Personal notifications
             _trackListener(db.ref('notifications/' + uid), (snap) => {
                 _memCache.notifications = snap.exists() ? (snap.val().items || []) : [];
-                this.notifyListeners();
-            });
+                self.notifyListeners();
+            }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
 
             // 5. Platform activity feed (latest 100, admin-read-only in DB rules)
             _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
                 _memCache.activities = snap.exists() ? Object.values(snap.val()).reverse() : [];
-                this.notifyListeners();
-            });
+                self.notifyListeners();
+            }, (err) => console.error("[Storage] Activity Listener Error:", err.message));
 
             // 6. Reviews
             _trackListener(db.ref('reviews'), (snap) => {
                 _memCache.reviews = snap.exists() ? Object.values(snap.val()) : [];
-                this.notifyListeners();
-            });
+                self.notifyListeners();
+            }, (err) => console.error("[Storage] Reviews Listener Error:", err.message));
 
         } catch (e) {
             console.error("[Estato Firebase] Failed to initialize listeners", e);
@@ -589,30 +620,37 @@ export const EstatoStorage = {
         inquiry.read = false;
 
         _memCache.inquiries.push(inquiry);
-
         try {
+            console.log(`[Sync] 📤 Outbound Inquiry: ${inquiry.id} to ${inquiry.ownerId}`);
             await db.ref('inquiries/' + inquiry.id).set(inquiry);
 
             // Maintain a per-user index for privacy-compliant listings
             await db.ref(`user_inquiries/${inquiry.buyerId}/${inquiry.id}`).set(true);
             await db.ref(`user_inquiries/${inquiry.ownerId}/${inquiry.id}`).set(true);
 
-            // Add notification to the seller
-            const notifRef = db.ref('notifications/' + inquiry.ownerId);
-            const docSnap = await notifRef.get();
-            let items = docSnap.exists() ? docSnap.val().items : [];
-            items.unshift({
-                id: 'notif_' + Date.now(),
-                message: `New Inquiry alert for ${inquiry.propertyTitle} from ${inquiry.buyerName}`,
-                type: 'new_inquiry',
-                meta: { id: inquiry.propertyId, ownerId: inquiry.ownerId },
-                timestamp: new Date().toISOString(),
-                read: false
-            });
-            await notifRef.set({ items: items });
+            /* 
+            // Add notification to the seller (Independently handled to prevent hangs)
+            try {
+                const notifRef = db.ref('notifications/' + inquiry.ownerId);
+                const docSnap = await notifRef.get();
+                let items = docSnap.exists() ? docSnap.val().items : [];
+                items.unshift({
+                    id: 'notif_' + Date.now(),
+                    message: `New Inquiry alert for ${inquiry.propertyTitle} from ${inquiry.buyerName}`,
+                    type: 'new_inquiry',
+                    meta: { id: inquiry.propertyId, ownerId: inquiry.ownerId },
+                    timestamp: new Date().toISOString(),
+                    read: false
+                });
+                await notifRef.set({ items: items });
+            } catch (notifErr) {
+                console.warn("[Storage] Failed to send cross-user inquiry notification:", notifErr.message);
+            }
+            */
 
             if (_syncCallback) _syncCallback('synced');
         } catch (e) {
+            console.error("[Storage] Inquiry submission failed:", e.message);
             if (_syncCallback) _syncCallback('error');
         }
         return inquiry;
@@ -631,25 +669,34 @@ export const EstatoStorage = {
         inquiry.replies.push(replyPayload);
 
         try {
+            console.log(`[Sync] 📤 Outbound Reply: ${inquiryId}`);
             await db.ref('inquiries/' + inquiryId + '/replies').set(inquiry.replies);
 
-            // Add notification to the receiver
-            const receiverId = replyPayload.senderRole === 'Buyer' ? inquiry.ownerId : inquiry.buyerId;
-            const notifRef = db.ref('notifications/' + receiverId);
-            const docSnap = await notifRef.get();
-            let items = docSnap.exists() ? docSnap.val().items : [];
-            items.unshift({
-                id: 'notif_' + Date.now(),
-                message: `New reply on inquiry for ${inquiry.propertyTitle} from ${replyPayload.senderName}`,
-                type: 'new_reply',
-                meta: { id: inquiry.propertyId, inquiryId: inquiry.id },
-                timestamp: new Date().toISOString(),
-                read: false
-            });
-            await notifRef.set({ items: items });
+            /*
+            // Add notification to the receiver (Independently handled to prevent hangs)
+            try {
+                const receiverId = replyPayload.senderRole === 'Buyer' ? inquiry.ownerId : inquiry.buyerId;
+                const notifRef = db.ref('notifications/' + receiverId);
+                const docSnap = await notifRef.get();
+                let items = docSnap.exists() ? docSnap.val().items : [];
+                items.unshift({
+                    id: 'notif_' + Date.now(),
+                    message: `New reply on inquiry for ${inquiry.propertyTitle} from ${replyPayload.senderName}`,
+                    type: 'new_reply',
+                    meta: { id: inquiry.propertyId, inquiryId: inquiry.id },
+                    timestamp: new Date().toISOString(),
+                    read: false
+                });
+                await notifRef.set({ items: items });
+            } catch (notifErr) {
+                console.warn("[Storage] Failed to send cross-user notification:", notifErr.message);
+                // We DON'T fail the message send just because a notification failed
+            }
+            */
 
             if (_syncCallback) _syncCallback('synced');
         } catch (e) {
+            console.error("[Storage] Messaging write failed:", e.message);
             if (_syncCallback) _syncCallback('error');
         }
         return replyPayload;
@@ -657,17 +704,48 @@ export const EstatoStorage = {
 
     async deleteInquiry(id) {
         if (_syncCallback) _syncCallback('syncing');
-        const index = _memCache.inquiries.findIndex(i => i.id === id);
-        if (index === -1) return false;
-
-        _memCache.inquiries.splice(index, 1);
         try {
-            await db.ref('inquiries/' + id).remove();
+            if (!auth.currentUser) throw new Error("Authentication required");
+            const uid = auth.currentUser.uid;
+            // Only remove from the private index. Do NOT delete the shared 'inquiries' node.
+            await db.ref(`user_inquiries/${uid}/${id}`).remove();
+            
             if (_syncCallback) _syncCallback('synced');
+            return true;
         } catch (e) {
+            console.error("[Storage] Private deletion failed:", e.message);
             if (_syncCallback) _syncCallback('error');
+            return false;
         }
-        return true;
+    },
+
+    async deleteInquiryReply(inquiryId, replyId) {
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            const snap = await db.ref(`inquiries/${inquiryId}`).once('value');
+            if (!snap.exists()) {
+                if (_syncCallback) _syncCallback('synced');
+                return false;
+            }
+
+            const inquiry = snap.val();
+            if (!inquiry.replies) {
+                if (_syncCallback) _syncCallback('synced');
+                return false;
+            }
+
+            // Remove the specific reply
+            const filteredReplies = inquiry.replies.filter(r => r.id !== replyId);
+            
+            await db.ref(`inquiries/${inquiryId}/replies`).set(filteredReplies);
+            
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error("[Storage] Reply deletion failed:", e.message);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
     },
 
     // ── Notifications ──
@@ -761,6 +839,7 @@ export const EstatoStorage = {
             forSale: stats.forSale,
             forRent: stats.forRent,
             totalValuation: stats.totalValue,
+            marketAvg: stats.totalProperties > 0 ? Math.round(stats.totalValue / stats.totalProperties) : 0,
             pendingCount: stats.pendingCount,
             availableCount: stats.availableCount,
             avgPriceByCity: avgPriceByCity,

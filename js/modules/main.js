@@ -361,7 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setupAppListeners();
             renderView(currentView);
             renderNotifications();
-            populateCitiesDatalist();
+            if (typeof populateCitiesDatalist === 'function') populateCitiesDatalist();
 
             // Real-time UI Sync — guard ensures we subscribe only once per session
             // even if checkAuth() is called again (e.g. after Drive re-auth).
@@ -589,16 +589,45 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 const inqId = document.getElementById('replyInqId').value;
+                const submitBtn = replyForm.querySelector('[type="submit"]');
+                const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
                 
-                await EstatoStorage.addInquiryReply(inqId, {
-                    senderId: currentUser.id,
-                    senderName: currentUser.name,
-                    senderRole: currentUser.role,
-                    message: msg
-                });
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Saving...';
+                }
 
-                replyModal.classList.remove('active');
-                replyForm.reset();
+                // Safety timeout to prevent permanent hang
+                const timeoutId = setTimeout(() => {
+                    if (submitBtn && submitBtn.disabled) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = origBtnHtml;
+                        showToast("Message send timed out. Please check your connection.", "error");
+                    }
+                }, 10000);
+
+                try {
+                    await EstatoStorage.addInquiryReply(inqId, {
+                        senderId: currentUser.id,
+                        senderName: currentUser.name,
+                        senderRole: currentUser.role,
+                        message: msg
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    replyModal.classList.remove('active');
+                    replyForm.reset();
+                    showToast("Reply sent successfully.");
+                } catch (err) {
+                    clearTimeout(timeoutId);
+                    console.error("[Inquiry] Reply failed:", err);
+                    showToast(err.message || 'Failed to send reply.', 'danger');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = origBtnHtml;
+                    }
+                }
             });
         }
 
@@ -614,7 +643,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const submitBtn = inquiryForm.querySelector('[type="submit"]');
                 const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
-                if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Sending...'; }
+                
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Sending...';
+                }
+
+                // Safety timeout
+                const timeoutId = setTimeout(() => {
+                    if (submitBtn && submitBtn.disabled) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = origBtnHtml;
+                        showToast("Inquiry timed out. Please check your connection.", "error");
+                    }
+                }, 10000);
 
                 try {
                     await EstatoStorage.addInquiry({
@@ -628,6 +670,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         message: msg,
                         status: 'Unread'
                     });
+
+                    clearTimeout(timeoutId);
 
                     // Show inline success state
                     const modalBody = inquiryModal.querySelector('.modal-body');
@@ -645,9 +689,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         setTimeout(() => { modalBody.innerHTML = originalContent; }, 300);
                     }, 2000);
                 } catch(err) {
-                    // Handles rate-limit error from EstatoStorage.addInquiry()
+                    clearTimeout(timeoutId);
                     showToast(err.message, 'warning', 6000);
-                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHtml; }
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = origBtnHtml;
+                    }
                 }
             });
         }

@@ -172,5 +172,6 @@ export function initForms(ctx) {
         }
     }
 
+    window.populateCitiesDatalist = populateCitiesDatalist;
     return { openModal, closeModal, handleFormSubmit, populateCitiesDatalist };
 }
