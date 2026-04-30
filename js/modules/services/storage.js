@@ -1423,7 +1423,22 @@ export const EstatoStorage = {
             });
 
             const data = await res.json();
-            if (!res.ok || data.error) throw new Error(data.error || 'Failed to finalize auction.');
+            
+            const p = this.getPropertyById(propertyId);
+            if (p && p.bidding) {
+                p.bidding.finalized = true;
+                if (p.status !== 'Sold' && p.status !== 'PaymentPending') {
+                    p.status = p.highestBidderId ? 'Sold' : 'Available';
+                }
+            }
+
+            if (!res.ok || data.error) {
+                if (res.status === 400 && data.error && data.error.includes('already finalized')) {
+                    if (_syncCallback) _syncCallback('synced');
+                    return true;
+                }
+                throw new Error(data.error || 'Failed to finalize auction.');
+            }
             
             this.logActivity('AUCTION_FINALIZED', `Auction finalized via server API.`);
             if (_syncCallback) _syncCallback('synced');
