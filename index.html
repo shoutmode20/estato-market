@@ -32,45 +32,52 @@
     </style>
 </head>
 <body>
+    <script>
+        if (localStorage.getItem('estato_theme') === 'dark') {
+            document.body.classList.add('dark-mode');
+        }
+    </script>
 
     <!-- Unified Google Sign-In Screen -->
     <div id="loginScreen" class="auth-overlay">
         <div class="auth-card">
+            <button id="authThemeToggleBtn" class="btn btn-icon" style="position: absolute; top: 1.5rem; right: 1.5rem;" title="Toggle Dark Mode">
+                <i class="ph ph-moon" id="authThemeToggleIcon"></i>
+            </button>
             <div class="auth-header">
-                <i class="ph-duotone ph-buildings" style="font-size: 3rem; color: var(--primary); margin-bottom: 1rem;"></i>
+                <i class="ph-duotone ph-buildings" style="font-size: 3.5rem; color: var(--primary); margin-bottom: 1.5rem; display: block;"></i>
                 <h1>Estato</h1>
-                <p>Premium Real Estate Marketplace</p>
+                <p>The Future of Real Estate</p>
             </div>
             
-            <div style="margin-bottom: 2rem;">
-                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem; text-align: center;">Choose your view (for first-time setup):</p>
-                <div class="role-selector" id="loginRoleSelector" style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
-                    <div class="role-card" data-role="Buyer" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
-                        <i class="ph ph-identification-card" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
-                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Buyer</span>
-                        <small style="font-size: 0.75rem; opacity: 0.8;">Browse & Buy</small>
+            <div class="auth-body">
+                <p style="font-size: 0.9rem; color: #94a3b8; margin-bottom: 1.5rem;">Select your workspace role:</p>
+                <div class="role-selector" id="loginRoleSelector">
+                    <div class="role-card" data-role="Buyer">
+                        <i class="ph ph-identification-card"></i>
+                        <span>Buyer</span>
+                        <small>Browse & Buy</small>
                     </div>
-                    <div class="role-card active" data-role="Seller" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
-                        <i class="ph ph-house-line" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
-                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Seller</span>
-                        <small style="font-size: 0.75rem; opacity: 0.8;">List & Sell</small>
+                    <div class="role-card active" data-role="Seller">
+                        <i class="ph ph-house-line"></i>
+                        <span>Seller</span>
+                        <small>List & Sell</small>
                     </div>
-                    <div class="role-card" data-role="Admin" style="flex: 1; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 1rem; text-align: center; cursor: pointer; transition: var(--transition);">
-                        <i class="ph ph-shield-check" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
-                        <span style="display: block; font-weight: 600; font-size: 0.9rem;">Admin</span>
-                        <small style="font-size: 0.75rem; opacity: 0.8;">Full Access</small>
+                    <div class="role-card" data-role="Admin">
+                        <i class="ph ph-shield-check"></i>
+                        <span>Admin</span>
+                        <small>Full Control</small>
                     </div>
                 </div>
                 <input type="hidden" id="selectedRole" value="Seller">
             </div>
 
-            <div style="display: flex; justify-content: center; margin-top: 1rem; gap: 1rem;">
-                <button class="btn btn-primary w-full" id="googleLoginBtn" style="padding: 1.25rem; font-size: 1.1rem; gap: 0.75rem; display: flex; align-items: center; justify-content: center;">
-                    <i class="ph ph-google-logo"></i> Sign in with Google
-                </button>
-            </div>
+            <button class="btn btn-secondary shadow-hover" id="googleLoginBtn" style="width: 100%; margin-top: 2rem; font-size: 1.05rem; padding: 0.85rem;">
+                <i class="ph ph-google-logo" style="font-size: 1.25rem;"></i>
+                Sign in with Google
+            </button>
 
-            <p id="loginErrorMsg" class="form-error" style="margin-top: 1rem; text-align: center;"></p>
+            <p id="loginErrorMsg" class="form-error" style="margin-top: 1.5rem; height: 1.2rem;"></p>
         </div>
     </div>
 
@@ -112,6 +119,10 @@
                     <span>Messages</span>
                     <span class="nav-badge hidden" id="msgBadge"></span>
                 </li>
+                <li class="nav-item admin-only" data-view="audit-logs">
+                    <i class="ph ph-scroll"></i>
+                    <span>Audit Logs</span>
+                </li>
                 <li class="nav-item" data-view="watchlist">
                     <i class="ph ph-heart"></i>
                     <span>Saved Properties</span>
@@ -121,6 +132,10 @@
                 <li class="nav-item" data-view="profile">
                     <i class="ph ph-user-circle"></i>
                     <span>My Profile</span>
+                </li>
+                <li class="nav-item" id="themeToggleBtn">
+                    <i class="ph ph-moon" id="themeToggleIcon"></i>
+                    <span id="themeToggleText">Dark Mode</span>
                 </li>
             </ul>
 
@@ -154,6 +169,9 @@
                                 <!-- Notifications injected here -->
                             </div>
                         </div>
+                    </div>
+                    <div id="walletBadge" class="sync-badge wallet-badge" title="Virtual Wallet Balance" onclick="window.openWalletModal()">
+                        <i class="ph ph-wallet"></i><span id="walletValue">₹100,000</span>
                     </div>
                     <div id="syncBadge" class="sync-badge sync-synced" title="Google Drive Sync Status">
                         <i class="ph ph-check-circle"></i><span>Synced</span>
@@ -291,6 +309,43 @@
                         </div>
                     </div>
 
+                    <div class="form-section-divider" style="margin: 2rem 0 1rem 0; border-top: 2px dashed var(--border-color); padding-top: 1rem;">
+                        <span style="font-weight: 700; color: var(--primary);"><i class="ph ph-gavel"></i> Bidding Options</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; background: var(--bg-hover); padding: 0.75rem; border-radius: var(--radius-sm);">
+                            <input type="checkbox" id="propBiddingEnabled" style="width: 20px; height: 20px;">
+                            <span style="font-weight: 600;">Enable Auction / Bidding for this property</span>
+                        </label>
+                    </div>
+
+                    <div id="biddingFields" style="display: none; background: var(--bg-hover); padding: 1.5rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 1.5rem;">
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>Auction Start Time</label>
+                                <input type="datetime-local" id="propBidStart">
+                            </div>
+                            <div class="form-group half">
+                                <label>Auction End Time (Max 10 days)</label>
+                                <input type="datetime-local" id="propBidEnd">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>Minimum Bid Increment (₹)</label>
+                                <input type="number" id="propBidIncrement" value="10000" step="10000" min="10000">
+                            </div>
+                            <div class="form-group half">
+                                <label>Entry Fee (₹)</label>
+                                <input type="number" id="propBidEntryFee" value="5000" step="500" min="0">
+                            </div>
+                        </div>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0 0;">
+                            <i class="ph ph-info"></i> Base price will be the "Value" set above. Bids must be in multiples of 10,000.
+                        </p>
+                    </div>
+
                     <div class="form-group">
                         <label>Property Description & Keywords</label>
                         <textarea id="propDescription" rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention amenities (Pool, Gym), nearby landmarks, or special features for better search discovery..." maxlength="2000"></textarea>
@@ -306,13 +361,27 @@
     </div>
 
     <!-- Floating Compare Tray -->
-    <div id="compareTray" class="compare-tray" style="position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%) translateY(150%); background: var(--bg-surface); padding: 1rem 1.5rem; border-radius: var(--radius-lg); box-shadow: 0 10px 25px rgba(0,0,0,0.1); z-index: 100; display: flex; align-items: center; gap: 1.5rem; border: 1px solid var(--border-color); transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);">
+    <div id="compareTray" class="compare-tray">
         <div style="display: flex; flex-direction: column;">
-            <span style="font-weight: 700; color: var(--text-main);">Compare Properties</span>
-            <span style="font-size: 0.8rem; color: var(--text-muted);"><span id="compareCount">0</span> Selected</span>
+            <span style="font-weight: 700; color: white;">Compare Properties</span>
+            <span style="font-size: 0.8rem; color: rgba(255,255,255,0.6);"><span id="compareCount">0</span> Selected</span>
         </div>
         <div id="compareListTray" style="display: flex; gap: 0.5rem; align-items: center;"></div>
         <button class="btn btn-primary shadow-hover" onclick="window.renderComparisonTable()" style="white-space: nowrap;">Compare Now</button>
+    </div>
+    
+    <!-- Added: Full Bid History Modal -->
+    <div class="modal-overlay" id="bidHistoryModal">
+        <div class="modal surface-panel" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>Full Bid History</h3>
+                <button class="close-btn" onclick="document.getElementById('bidHistoryModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="fullBidHistoryList" style="display: flex; flex-direction: column; gap: 1rem; max-height: 500px; overflow-y: auto;">
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Comparison Table Modal -->
@@ -435,7 +504,7 @@
                     <h3 id="detailsTitle" style="font-size: 1.5rem; margin-bottom: 0.25rem;">Property Name</h3>
                     <p id="detailsLocation" style="font-size: 0.95rem; color: var(--text-muted); margin: 0;"><i class="ph ph-map-pin"></i> Location</p>
                 </div>
-                <button class="close-btn" onclick="document.getElementById('propertyDetailsModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+                <button class="close-btn" onclick="window.closePropertyDetailsModal()"><i class="ph ph-x"></i></button>
             </div>
             <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
                 <div id="detailsImageCarousel" style="margin-bottom: 1.5rem; border-radius: var(--radius-md); overflow: hidden; background: var(--bg-hover);">
@@ -488,6 +557,110 @@
                 </div>
                 <div id="priceInfo" style="margin-top: 2rem; padding: 1rem; background: var(--bg-main); border-radius: var(--radius-sm); font-size: 0.85rem; color: var(--text-muted);">
                     <i class="ph ph-info"></i> Historical data based on listed price updates on Estato.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bidding / Auction Modal -->
+    <div class="modal-overlay" id="bidModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Place Your Bid</h3>
+                    <p id="bidPropTitle" style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Property Name</p>
+                </div>
+                <button class="close-btn" onclick="document.getElementById('bidModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="bidStatusContainer" style="margin-bottom: 1.5rem; padding: 1.25rem; border-radius: var(--radius-sm); background: var(--bg-hover); border: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span style="color: var(--text-muted);">Current Highest Bid</span>
+                        <strong id="currentHighBid" style="color: var(--primary); font-size: 1.25rem;">₹0</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: var(--text-muted);">Time Remaining</span>
+                        <strong id="bidTimeLeft" style="color: var(--danger);">00:00:00</strong>
+                    </div>
+                </div>
+
+                <div id="feePaymentSection" class="hidden" style="text-align: center; padding: 1rem;">
+                    <p style="margin-bottom: 1.5rem; font-size: 0.95rem; line-height: 1.6;">You must pay a one-time entry fee to participate in this auction.</p>
+                    <div style="background: var(--bg-main); padding: 1rem; border-radius: var(--radius-sm); margin-bottom: 1.5rem; border: 1px dashed var(--border-color);">
+                        <small style="display: block; color: var(--text-muted); margin-bottom: 0.25rem;">Entry Fee Amount</small>
+                        <strong id="bidEntryFeeAmount" style="font-size: 1.5rem; color: var(--text-main);">₹5,000</strong>
+                    </div>
+                    <button class="btn btn-primary w-full shadow-hover" id="payFeeBtn" style="padding: 1rem;">
+                        <i class="ph ph-credit-card"></i> Pay Entry Fee & Join
+                    </button>
+                </div>
+
+                <div id="bidPlacementSection" class="hidden">
+                    <form id="bidForm">
+                        <input type="hidden" id="bidPropertyId">
+                        <div class="form-group">
+                            <label>Your Bid Amount (In multiples of ₹10,000)</label>
+                            <input type="number" id="bidAmountInput" required step="10000" style="font-size: 1.25rem; padding: 1rem; text-align: center; border: 2px solid var(--primary);">
+                            
+                            <div id="bidSuggestions" style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; flex-wrap: wrap;">
+                                <!-- Suggestions injected here -->
+                            </div>
+
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.75rem; text-align: center;">
+                                Minimum next bid: <span id="minNextBid" style="font-weight: 700;">₹0</span>
+                            </p>
+                        </div>
+                        <div class="modal-footer" style="padding: 1.5rem 0 0 0; border: none;">
+                            <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1.25rem; font-size: 1.1rem;">
+                                <i class="ph ph-gavel"></i> Confirm Bid
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div id="bidHistorySection" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h4 style="font-size: 0.9rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Bid History</h4>
+                        <span id="bidCountBadge" class="badge" style="background: var(--bg-hover); color: var(--text-muted); padding: 0.2rem 0.6rem; border-radius: 10px; font-size: 0.75rem;">0 Bids</span>
+                    </div>
+                    <div id="bidHistoryTimeline" style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                        <!-- Timeline entries injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Wallet / Top-up Modal -->
+    <div class="modal-overlay" id="walletModal">
+        <div class="modal surface-panel" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>Virtual Wallet</h3>
+                <button class="close-btn" onclick="document.getElementById('walletModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="text-align: center; padding: 2rem 1.5rem;">
+                <div style="margin-bottom: 2rem;">
+                    <div style="font-size: 3rem; color: var(--primary); margin-bottom: 1rem;"><i class="ph-duotone ph-wallet"></i></div>
+                    <p style="color: var(--text-muted); margin-bottom: 0.5rem;">Current Balance</p>
+                    <h2 id="walletBalanceDisplay" style="font-size: 2.5rem; font-weight: 800; color: var(--text-main);">₹100,000</h2>
+                </div>
+                
+                <div style="background: var(--bg-hover); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+                    <h4 style="margin-bottom: 1rem;">Top-up (Simulation)</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="10000">+ ₹10k</button>
+                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000">+ ₹50k</button>
+                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000" style="background:#f8fafc;">+ ₹50,000</button>
+                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="100000" style="background:#f8fafc;">+ ₹1,00,000</button>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">Or enter a custom amount:</p>
+                    <div style="display: flex; gap: 0.75rem;">
+                        <input type="number" id="customAmountInput" placeholder="Amount (multiples of 1000)" style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem;">
+                        <button class="btn btn-primary" id="addCustomFundsBtn">Add Funds</button>
+                    </div>
                 </div>
             </div>
         </div>

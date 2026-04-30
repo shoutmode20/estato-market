@@ -21,6 +21,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentView = 'properties'; // Default fallback
     let currentFilterCity = null;
     let storageSubscribed = false;   // Guard: prevent duplicate EstatoStorage.subscribe() calls across re-auths
+    let countdownInterval = null;
+
+    // Debounce guards: prevent auction functions being called multiple times
+    // per second from the 1s timer loop while Firebase write is in-flight.
+    const _pendingFinalizations = new Set();
+    const _pendingDefaults = new Set();
 
     let currentSort = 'newest';
     let currentTypeFilter = '';
@@ -52,7 +58,188 @@ document.addEventListener('DOMContentLoaded', () => {
     let compareList = [];
     let _compareRestored = false;
     let _renderDistanceMap = new Map();
-    
+
+    // --- CRITICAL: Register global stubs early ---
+    // These are referenced in dynamically-rendered HTML onclick attributes.
+    // They MUST be on window before renderView() is called, which happens in checkAuth() at line ~452.
+
+    function _syncCompareIcons() {
+        document.querySelectorAll('.compare-btn').forEach(btn => {
+            const btnId = btn.getAttribute('data-id');
+            const isSelected = compareList.some(p => p.id === btnId);
+            btn.classList.toggle('selected', isSelected);
+        });
+    }
+
+    window.toggleCompare = function(id, event) {
+        if (event) { event.stopPropagation(); event.stopImmediatePropagation(); }
+        const prop = EstatoStorage.getPropertyById(id);
+        if (!prop) { console.warn('[Compare] Property not found:', id); return; }
+        const index = compareList.findIndex(p => p.id === id);
+        if (index === -1) {
+            if (compareList.length >= 3) {
+                showToast('You can compare up to 3 properties at a time.', 'warning');
+                return;
+            }
+            compareList.push(prop);
+            showToast(`"${prop.title.substring(0, 25)}" added to compare.`, 'success');
+        } else {
+            compareList.splice(index, 1);
+            showToast(`"${prop.title.substring(0, 25)}" removed from compare.`, 'info');
+        }
+        _updateCompareTray();
+        _syncCompareIcons();
+        localStorage.setItem('estato_compare_v1', JSON.stringify(compareList.map(p => p.id)));
+    };
+
+    window.clearCompare = function() {
+        compareList = [];
+        localStorage.setItem('estato_compare_v1', '[]');
+        _updateCompareTray();
+        _syncCompareIcons();
+    };
+
+    window.renderComparisonTable = function() {
+        if (compareList.length < 2) {
+            showToast('Please select at least 2 properties to compare.', 'info');
+            return;
+        }
+        const container = document.getElementById('comparisonTableContainer');
+        const modal = document.getElementById('compareModal');
+        if (!container || !modal) return;
+
+        const currFmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+        let html = `<div class="comparison-table-wrapper"><table class="comparison-table"><thead><tr><th>Feature</th>`;
+        compareList.forEach(p => {
+            const img = window.formatEstatoImage((p.images && p.images.length > 0) ? p.images[0] : (p.image || ''));
+            html += `<th class="prop-header">${img ? `<img src="${img}" onerror="this.onerror=null;this.src=window.ESTATO_DEFAULT_IMG;">` : ''}<div style="font-weight:700;margin-top:5px;">${p.title}</div></th>`;
+        });
+        html += `</tr></thead><tbody>`;
+        const rows = [
+            { label: 'Price',    key: 'price',    icon: 'ph-tag',       format: v => currFmt.format(v), type: 'min' },
+            { label: 'Area',     key: 'area',     icon: 'ph-ruler',     format: v => v != null ? Number(v).toLocaleString() + ' sq.ft' : 'N/A', type: 'max' },
+            { label: 'Type',     key: 'type',     icon: 'ph-house-line' },
+            { label: 'Layout',   key: 'bhk',      icon: 'ph-layout' },
+            { label: 'Category', key: 'category', icon: 'ph-bookmarks' },
+            { label: 'Status',   key: 'status',   icon: 'ph-info' },
+            { label: 'City',     key: 'city',     icon: 'ph-map-pin' }
+        ];
+        rows.forEach(row => {
+            let bestVal = null;
+            if (row.type === 'min') bestVal = Math.min(...compareList.map(p => p[row.key]));
+            else if (row.type === 'max') bestVal = Math.max(...compareList.map(p => p[row.key]));
+            const values = compareList.map(p => String(p[row.key]));
+            const hasDiff = new Set(values).size > 1;
+            html += `<tr><th style="background:var(--bg-hover);font-weight:600;color:var(--text-muted);"><i class="${row.icon}" style="margin-right:8px;"></i>${row.label}</th>`;
+            compareList.forEach(p => {
+                const val = p[row.key];
+                const isBest = bestVal !== null && val === bestVal && hasDiff;
+                const style = isBest ? 'background:rgba(16,185,129,0.1);color:#059669;font-weight:700;' : (hasDiff ? 'background:rgba(234,88,12,0.02);' : '');
+                html += `<td style="${style}">${isBest ? '<i class="ph-fill ph-check-circle" style="margin-right:4px;color:#059669;"></i>' : ''}${row.format ? row.format(val) : (val ?? 'N/A')}</td>`;
+            });
+            html += `</tr>`;
+        });
+        html += `</tbody></table></div>`;
+        container.innerHTML = html;
+        modal.classList.add('active');
+
+        // Clear compare state & lights after opening the table
+        compareList = [];
+        localStorage.setItem('estato_compare_v1', '[]');
+        _updateCompareTray();
+        _syncCompareIcons();
+    };
+
+    function _updateCompareTray() {
+        const tray = document.getElementById('compareTray');
+        const count = document.getElementById('compareCount');
+        const listTray = document.getElementById('compareListTray');
+        if (!tray || !count || !listTray) return;
+        count.textContent = compareList.length;
+        if (compareList.length > 0) {
+            tray.classList.add('active');
+            listTray.innerHTML = compareList.map(p =>
+                `<div style="background:rgba(255,255,255,0.15);padding:0.25rem 0.75rem;border-radius:20px;font-size:0.8rem;display:flex;align-items:center;gap:0.4rem;border:1px solid rgba(255,255,255,0.2);">
+                    <span style="white-space:nowrap;">${(p.title || 'Property').substring(0, 20)}</span>
+                    <i class="ph ph-x" style="cursor:pointer;color:#ff8080;font-size:0.9rem;" onclick="window.toggleCompare('${p.id}',event)"></i>
+                </div>`
+            ).join('') + `<button onclick="window.clearCompare()" style="background:rgba(255,255,255,0.1);color:white;border:1px solid rgba(255,255,255,0.2);border-radius:50%;width:28px;height:28px;min-width:28px;cursor:pointer;display:flex;align-items:center;justify-content:center;" title="Clear all"><i class="ph ph-trash" style="font-size:0.9rem;pointer-events:none;"></i></button>`;
+        } else {
+            tray.classList.remove('active');
+            listTray.innerHTML = '';
+        }
+    }
+
+
+     /**
+      * Non-blocking prompt dialog. Replaces native prompt().
+      */
+    function showPrompt(message, onConfirm, onCancel) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;`;
+        
+        overlay.innerHTML = `
+            <div style="background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-lg);padding:1.5rem;width:90%;max-width:360px;box-shadow:var(--shadow-lg);animation:slideUpFade 0.3s cubic-bezier(0.16, 1, 0.3, 1);">
+                <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;color:var(--text-main);">
+                    <div style="background:var(--bg-hover);padding:0.5rem;border-radius:50%;color:var(--primary);display:flex;">
+                        <i class="ph-duotone ph-chat-text" style="font-size:1.5rem;"></i>
+                    </div>
+                    <h3 style="font-size:1.1rem;font-weight:600;margin:0;">Input Required</h3>
+                </div>
+                <p style="color:var(--text-muted);font-size:0.95rem;margin-bottom:1rem;">${escapeHtml(message)}</p>
+                <textarea id="promptInput" style="width:100%;min-height:80px;padding:0.75rem;border-radius:var(--radius-sm);border:1px solid var(--border-color);background:var(--bg-main);color:var(--text-main);font-family:inherit;margin-bottom:1.5rem;" placeholder="Type here..."></textarea>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                    <button id="promptCancelBtn" class="btn btn-secondary shadow-hover" style="flex:1;">Cancel</button>
+                    <button id="promptConfirmBtn" class="btn btn-primary shadow-hover" style="flex:1;">Submit</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+        const input = document.getElementById('promptInput');
+        if (input) input.focus();
+        
+        document.getElementById('promptConfirmBtn').addEventListener('click', () => {
+            const val = input.value.trim();
+            overlay.remove();
+            if (onConfirm) onConfirm(val);
+        });
+        
+        document.getElementById('promptCancelBtn').addEventListener('click', () => {
+            overlay.remove();
+            if (onCancel) onCancel();
+        });
+    }
+
+    function getHaversineDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+
+    async function resolveLocationToCoords(query) {
+        if (!query) return null;
+        try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`);
+            const data = await res.json();
+            if (data && data.length > 0) {
+                return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+            }
+        } catch (e) {
+            console.error('[Geocoding] Selection failed:', e);
+        }
+        return null;
+    }
+
+    function getSimilarProperties(property) {
+        return coreSimilarProps(property, EstatoStorage.getProperties());
+    }
+
     // --- Utilities (Imported via ES6 Modules) ---
 
     /**
@@ -221,6 +408,40 @@ document.addEventListener('DOMContentLoaded', () => {
     const notifDropdown = document.getElementById('notifDropdown');
     const notifList = document.getElementById('notifList');
 
+    // Theme Toggle Logic
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    const authThemeToggleBtn = document.getElementById('authThemeToggleBtn');
+    
+    const updateThemeUI = () => {
+        const isDark = document.body.classList.contains('dark-mode');
+        
+        // Sidebar Toggle
+        const icon = document.getElementById('themeToggleIcon');
+        const text = document.getElementById('themeToggleText');
+        if (icon && text) {
+            icon.className = isDark ? 'ph ph-sun' : 'ph ph-moon';
+            text.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+        }
+        
+        // Auth Overlay Toggle
+        const authIcon = document.getElementById('authThemeToggleIcon');
+        if (authIcon) {
+            authIcon.className = isDark ? 'ph ph-sun' : 'ph ph-moon';
+        }
+    };
+    
+    const handleThemeToggle = () => {
+        const isDark = document.body.classList.toggle('dark-mode');
+        localStorage.setItem('estato_theme', isDark ? 'dark' : 'light');
+        updateThemeUI();
+    };
+
+    if (themeToggleBtn) themeToggleBtn.addEventListener('click', handleThemeToggle);
+    if (authThemeToggleBtn) authThemeToggleBtn.addEventListener('click', handleThemeToggle);
+    
+    // Initialize UI state
+    updateThemeUI();
+
     // Number Formatter
     const currencyFormatter = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 
@@ -345,11 +566,27 @@ document.addEventListener('DOMContentLoaded', () => {
     function checkAuth() {
         currentUser = EstatoStorage.getCurrentUser();
         if (currentUser) {
+            // Global Ban Check
+            if (currentUser.isBanned) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Account Banned',
+                    text: 'Your account has been permanently suspended due to repeated auction defaults (3 strikes).',
+                    confirmButtonText: 'Understood',
+                    allowOutsideClick: false
+                }).then(() => {
+                    location.reload();
+                });
+                return;
+            }
+
             loginScreen.classList.add('hidden');
             loadingOverlay.classList.add('hidden');
             appContainer.classList.remove('hidden');
             
-            document.getElementById('headerGreetingText').textContent = `Hello, ${currentUser.name.split(' ')[0]}`;
+            const rep = (currentUser.reputation === undefined) ? 5.0 : currentUser.reputation;
+            const repFormatted = parseFloat(rep).toFixed(1);
+            document.getElementById('headerGreetingText').innerHTML = `Hello, ${currentUser.name.split(' ')[0]} <span style="font-size: 0.85rem; color: #fbbf24; margin-left: 0.5rem; background: rgba(0,0,0,0.05); padding: 0.2rem 0.5rem; border-radius: 20px; border: 1px solid rgba(0,0,0,0.05);"><i class="ph-fill ph-star"></i> ${repFormatted}</span>`;
             document.getElementById('headerRoleBadge').textContent = currentUser.role;
 
             applyRBACToDOM();
@@ -360,16 +597,34 @@ document.addEventListener('DOMContentLoaded', () => {
             setupAppListeners();
             renderView(currentView);
             renderNotifications();
-            if (typeof populateCitiesDatalist === 'function') populateCitiesDatalist();
+            if (formApi && typeof formApi.populateCitiesDatalist === 'function') formApi.populateCitiesDatalist();
+
+            // Start Reliable Real-time Countdown Timers
+            if (countdownInterval) clearInterval(countdownInterval);
+            countdownInterval = setInterval(() => {
+                updateAllCountdowns();
+            }, 500); // 500ms for better responsiveness
+            updateAllCountdowns(); // Initial immediate run
 
             // Real-time UI Sync — guard ensures we subscribe only once per session
             // even if checkAuth() is called again (e.g. after Drive re-auth).
             // The debounce collapses rapid simultaneous DB events into one render pass.
             if (!storageSubscribed) {
                 storageSubscribed = true;
-                const _debouncedRender = debounce(() => {
-                    // One-time compare list restore — deferred until properties are actually loaded.
-                    // Cannot run at module parse time because the memory cache is empty then.
+                const _debouncedGlobalUpdate = debounce(() => {
+                    console.log("[Estato] Global real-time sync triggered.");
+                    
+                    // 1. App-wide state sync
+                    const updatedUser = EstatoStorage.getCurrentUser();
+                    if (updatedUser) {
+                        currentUser = updatedUser;
+                        updateWalletUI(); // Sync top bar and other global wallet UI
+                    }
+
+                    // 2. Component-specific targeted syncs
+                    syncActiveBidModal();
+
+                    // 3. View-specific re-renders
                     if (!_compareRestored && EstatoStorage.getProperties().length > 0) {
                         _compareRestored = true;
                         const savedIds = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]');
@@ -381,12 +636,25 @@ document.addEventListener('DOMContentLoaded', () => {
                             updateCompareTray();
                         }
                     }
-                    renderView(currentView, searchInput.value);
+                    
+                    renderView(currentView, searchInput ? searchInput.value : '');
                     renderNotifications();
                     updateSidebarBadges();
                     updateSeoMetadata();
+                    
+                    // History API Routing: Open property if URL path is /property/:id
+                    if (window.location.pathname.startsWith('/property/')) {
+                        const pathParts = window.location.pathname.split('/property/');
+                        if (pathParts.length > 1 && pathParts[1]) {
+                            const p = EstatoStorage.getPropertyById(pathParts[1]);
+                            if (p && document.getElementById('propertyDetailsModal')) {
+                                window.openPropertyDetails(p, true); // true = skip pushState
+                            }
+                        }
+                    }
                 }, 150);
-                EstatoStorage.subscribe(_debouncedRender);
+                
+                EstatoStorage.subscribe(_debouncedGlobalUpdate);
             }
         } else {
             loginScreen.classList.remove('hidden');
@@ -396,26 +664,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setupAuthListeners() {
         console.log("Attaching Auth Listeners...");
-        // Role Selector for first-time sign-in
-        loginRoleCards.forEach(card => {
-            card.addEventListener('click', () => {
-                console.log("Role Card Selected:", card.getAttribute('data-role'));
-                loginRoleCards.forEach(c => c.classList.remove('active'));
-                card.classList.add('active');
-                
-                const selected = card.getAttribute('data-role');
-                selectedRoleInput.value = selected;
+        const loginRoleCardsLocal = document.querySelectorAll('#loginRoleSelector .role-card');
+        const googleLoginBtnLocal = document.getElementById('googleLoginBtn');
+        const selectedRoleInputLocal = document.getElementById('selectedRole');
+
+        if (loginRoleCardsLocal.length > 0) {
+            loginRoleCardsLocal.forEach(card => {
+                card.onclick = () => { // Using onclick for better debugging/capture
+                    console.log("Role Card Selected:", card.getAttribute('data-role'));
+                    loginRoleCardsLocal.forEach(c => c.classList.remove('active'));
+                    card.classList.add('active');
+                    
+                    const selected = card.getAttribute('data-role');
+                    if (selectedRoleInputLocal) selectedRoleInputLocal.value = selected;
+                };
             });
-        });
+        }
 
         // Unified Google Login
-        if (googleLoginBtn) {
-            googleLoginBtn.addEventListener('click', async () => {
-                const role = selectedRoleInput.value;
+        if (googleLoginBtnLocal) {
+            googleLoginBtnLocal.onclick = async () => {
+                const role = selectedRoleInputLocal ? selectedRoleInputLocal.value : 'Seller';
 
                 console.log("Google Login Button Clicked!");
-                googleLoginBtn.disabled = true;
-                googleLoginBtn.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Authenticating...';
+                googleLoginBtnLocal.disabled = true;
+                googleLoginBtnLocal.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Authenticating...';
 
                 try {
                     const success = await EstatoStorage.loginWithGoogle(role, false);
@@ -429,13 +702,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         throw new Error('Login cancelled or failed.');
                     }
                 } catch (err) {
-                    loginErrorMsg.textContent = err.message;
-                    loginErrorMsg.classList.add('active');
-                    setTimeout(() => loginErrorMsg.classList.remove('active'), 4000);
-                    googleLoginBtn.disabled = false;
-                    googleLoginBtn.innerHTML = '<i class="ph ph-google-logo"></i> Sign in with Google';
+                    if (loginErrorMsg) {
+                        loginErrorMsg.textContent = err.message;
+                        loginErrorMsg.classList.add('active');
+                        setTimeout(() => loginErrorMsg.classList.remove('active'), 4000);
+                    }
+                    googleLoginBtnLocal.disabled = false;
+                    googleLoginBtnLocal.innerHTML = '<i class="ph ph-google-logo"></i> Sign in with Google';
                 }
-            });
+            };
         }
     }
     
@@ -449,10 +724,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (el.getAttribute('data-view') === 'messages') el.style.display = 'flex'; // Buyers always see messages
                 else el.style.display = 'none';
             });
-        } else if (role === 'Seller' || role === 'Admin') {
+        } else if (role === 'Seller') {
+            adminElements.forEach(el => {
+                if (el.getAttribute('data-view') === 'audit-logs') el.style.display = 'none';
+                else el.style.display = 'flex';
+            });
+        } else if (role === 'Admin') {
             adminElements.forEach(el => el.style.display = 'flex');
         }
-
     }
 
 
@@ -507,11 +786,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const view = item.getAttribute('data-view');
                 if (view !== 'properties') {
                     currentFilterCity = null;
-                    // Clear comparison state when leaving properties view
-                    if (compareList.length > 0) {
-                        compareList = [];
-                        updateCompareTray();
-                    }
                 }
                 setActiveNav(view);
                 renderView(view);
@@ -568,6 +842,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         }
+
+        // History API Listener for Back/Forward navigation
+        window.addEventListener('popstate', (e) => {
+            if (window.location.pathname === '/' || window.location.pathname === '') {
+                document.getElementById('propertyDetailsModal').classList.remove('active');
+            } else if (window.location.pathname.startsWith('/property/')) {
+                const pid = window.location.pathname.split('/property/')[1];
+                if (pid) {
+                    const p = EstatoStorage.getPropertyById(pid);
+                    if (p) window.openPropertyDetails(p, true);
+                }
+            }
+        });
 
 
 
@@ -1222,6 +1509,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'properties': renderProperties(currentFilterCity, searchQuery); break;
             case 'watchlist': renderSavedProperties(); break;
             case 'profile': renderProfile(); break;
+            case 'audit-logs': renderAuditLogs(); break;
             default: renderProperties();
         }
     }
@@ -1381,7 +1669,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // RBAC Filtering (Fraud Prevention Sandbox)
         if (currentUser.role === 'Buyer') {
-            properties = properties.filter(p => p.status === 'Available');
+            properties = properties.filter(p => p.status !== 'Pending');
         } else if (currentUser.role === 'Seller') {
             properties = properties.filter(p => p.status !== 'Pending' || p.ownerId === currentUser.id);
         }
@@ -1663,6 +1951,367 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         attachCardListeners();
+        initBiddingOrchestration();
+    }
+
+
+    // ── Bidding & Wallet Orchestration ──
+    function initBiddingOrchestration() {
+        // 6. View Full History Interaction
+        window.viewFullHistory = (propId) => {
+            const prop = EstatoStorage.getPropertyById(propId);
+            if (!prop) return;
+            const bids = EstatoStorage.getBidsByProperty(propId);
+            if (bids.length === 0) return;
+
+            const list = document.getElementById('fullBidHistoryList');
+            const modal = document.getElementById('bidHistoryModal');
+            
+            if (list && modal) {
+                list.innerHTML = bids.slice().reverse().map(bid => `
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: var(--bg-main); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem;">
+                                ${bid.userName.charAt(0)}
+                            </div>
+                            <div>
+                                <div style="font-weight: 600; font-size: 0.9rem;">${escapeHtml(bid.userName)}</div>
+                                <div style="font-size: 0.75rem; color: var(--text-muted);">${new Date(bid.timestamp).toLocaleString()}</div>
+                            </div>
+                        </div>
+                        <div style="font-weight: 700; color: var(--text-main);">${currencyFormatter.format(bid.amount)}</div>
+                    </div>
+                `).join('');
+                
+                modal.classList.add('active');
+            }
+        };
+
+        // 1. Global UI Sync (Initial)
+        updateWalletUI();
+
+        // 3. Start Global Countdown Manager
+        if (countdownInterval) clearInterval(countdownInterval);
+        countdownInterval = setInterval(updateAllCountdowns, 1000);
+
+        // 4. Global Modal Events
+        const payFeeBtn = document.getElementById('payFeeBtn');
+        if (payFeeBtn) {
+            payFeeBtn.onclick = async () => {
+                const propId = document.getElementById('bidPropertyId').value;
+                payFeeBtn.disabled = true;
+                payFeeBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Processing...';
+                try {
+                    await EstatoStorage.payEntryFee(propId);
+                    showToast('Entry fee paid! You can now place bids.', 'success');
+                    window.openBidModal(propId); // Refresh modal state
+                } catch (e) {
+                    showToast(e.message, 'danger');
+                    payFeeBtn.disabled = false;
+                    payFeeBtn.innerHTML = '<i class="ph ph-credit-card"></i> Pay Entry Fee & Join';
+                }
+            };
+        }
+
+        const bidForm = document.getElementById('bidForm');
+        if (bidForm) {
+            bidForm.onsubmit = async (e) => {
+                e.preventDefault();
+                const propId = document.getElementById('bidPropertyId').value;
+                const amount = document.getElementById('bidAmountInput').value;
+                const submitBtn = bidForm.querySelector('button[type="submit"]');
+                
+                try {
+                    // Pre-validation for instant feedback
+                    EstatoStorage.validateBid(propId, amount);
+
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Placing Bid...';
+                    
+                    await EstatoStorage.placeBid(propId, amount);
+                    showToast('Bid placed successfully!', 'success');
+                    document.getElementById('bidModal').classList.remove('active');
+                } catch (err) {
+                    showToast(err.message, 'danger');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="ph ph-gavel"></i> Confirm Bid';
+                }
+            };
+        }
+
+        // Wallet button listeners are now handled via global event delegation
+
+    }
+
+    function updateWalletUI() {
+        const walletValue = document.getElementById('walletValue');
+        const walletBalanceDisplay = document.getElementById('walletBalanceDisplay');
+        const balance = EstatoStorage.getWalletBalance();
+        const formatted = currencyFormatter.format(balance);
+        
+        if (walletValue) walletValue.textContent = formatted;
+        if (walletBalanceDisplay) walletBalanceDisplay.textContent = formatted;
+    }
+
+    window.openWalletModal = () => {
+        updateWalletUI();
+        document.getElementById('walletModal').classList.add('active');
+    };
+
+    // --- Global Wallet Event Delegation ---
+    document.body.addEventListener('click', async (e) => {
+        // Preset Add Funds Buttons
+        const presetBtn = e.target.closest('.add-funds-btn');
+        if (presetBtn) {
+            const amount = presetBtn.getAttribute('data-amount');
+            try {
+                await EstatoStorage.addFunds(amount);
+                showToast(`₹${Number(amount).toLocaleString()} added to your wallet!`, 'success');
+            } catch (err) {
+                showToast('Failed to add funds.', 'danger');
+            }
+            return;
+        }
+
+        // Custom Add Funds Button
+        const customBtn = e.target.closest('#addCustomFundsBtn');
+        if (customBtn) {
+            const customAmountInput = document.getElementById('customAmountInput');
+            const amount = parseInt(customAmountInput.value);
+            if (isNaN(amount) || amount <= 0 || amount % 1000 !== 0) {
+                showToast('Please enter a valid amount (multiple of ₹1,000).', 'warning');
+                return;
+            }
+            customBtn.disabled = true;
+            customBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Processing...';
+            try {
+                await EstatoStorage.addFunds(amount);
+                showToast(`₹${amount.toLocaleString()} added to your wallet!`, 'success');
+                customAmountInput.value = '';
+            } catch (err) {
+                showToast('Failed to add funds.', 'danger');
+            } finally {
+                customBtn.disabled = false;
+                customBtn.innerHTML = 'Add Funds';
+            }
+        }
+    });
+
+    window.openBidModal = (id) => {
+        const prop = EstatoStorage.getPropertyById(id);
+        if (!prop || !prop.bidding || !prop.bidding.enabled) return;
+
+        document.getElementById('bidPropertyId').value = id;
+        document.getElementById('bidPropTitle').textContent = prop.title;
+        
+        const currentHighest = Number(prop.highestBid || prop.bidding.basePrice || 0);
+        document.getElementById('currentHighBid').textContent = currencyFormatter.format(currentHighest);
+        document.getElementById('minNextBid').textContent = currencyFormatter.format(currentHighest + (prop.bidding.minIncrement || 10000));
+        document.getElementById('bidAmountInput').value = currentHighest + (prop.bidding.minIncrement || 10000);
+
+        // Check entry fee participation
+        const participants = prop.bidding.participants || {};
+        const feePaid = !!participants[currentUser.id];
+
+        const feeSection = document.getElementById('feePaymentSection');
+        const bidSection = document.getElementById('bidPlacementSection');
+        
+        if (feePaid) {
+            feeSection.classList.add('hidden');
+            bidSection.classList.remove('hidden');
+        } else {
+            feeSection.classList.remove('hidden');
+            bidSection.classList.add('hidden');
+            document.getElementById('bidEntryFeeAmount').textContent = currencyFormatter.format(prop.bidding.entryFee || 5000);
+        }
+
+        document.getElementById('bidModal').classList.add('active');
+        updateAllCountdowns(); // Initial update for time left
+        renderBidSuggestions(currentHighest + (prop.bidding.minIncrement || 10000));
+        renderBidHistory(prop);
+    };
+
+    function renderBidHistory(prop) {
+        const timeline = document.getElementById('bidHistoryTimeline');
+        const badge = document.getElementById('bidCountBadge');
+        if (!timeline) return;
+
+        const bids = prop.bids ? Object.values(prop.bids) : [];
+        const sortedBids = bids.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        if (badge) badge.textContent = `${sortedBids.length} Bids`;
+
+        if (sortedBids.length === 0) {
+            timeline.innerHTML = '<p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 1rem;">No bids yet. Be the first!</p>';
+            return;
+        }
+
+        timeline.innerHTML = sortedBids.map((bid, i) => {
+            const isLatest = i === 0;
+            const timeStr = new Date(bid.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            return `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border-radius: var(--radius-sm); background: ${isLatest ? 'rgba(234, 88, 12, 0.05)' : 'var(--bg-main)'}; border: 1px solid ${isLatest ? 'var(--primary)' : 'var(--border-color)'}; border-left: 3px solid ${isLatest ? 'var(--primary)' : 'var(--border-color)'};">
+                    <div>
+                        <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-main);">${currencyFormatter.format(bid.amount)}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(bid.userName)}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        ${isLatest ? '<span style="display: block; font-size: 0.65rem; color: var(--primary); font-weight: 800; text-transform: uppercase; margin-bottom: 2px;">Leading</span>' : ''}
+                        <div style="font-size: 0.75rem; color: var(--text-muted); opacity: 0.8;">${timeStr}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function renderBidSuggestions(minNext) {
+        const container = document.getElementById('bidSuggestions');
+        if (!container) return;
+        
+        // Suggest minNext, minNext + 10k, minNext + 50k, minNext + 100k
+        const increments = [0, 10000, 50000, 100000];
+        const suggestions = increments.map(inc => minNext + inc);
+
+        container.innerHTML = suggestions.map(amt => `
+            <button type="button" class="bid-suggest-chip" data-amount="${amt}" style="padding: 0.5rem 0.9rem; border-radius: 20px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--primary); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+                ₹${amt.toLocaleString()}
+            </button>
+        `).join('');
+
+        container.querySelectorAll('.bid-suggest-chip').forEach(chip => {
+            chip.onclick = () => {
+                const amount = chip.getAttribute('data-amount');
+                const input = document.getElementById('bidAmountInput');
+                if (input) {
+                    input.value = amount;
+                    // Trigger simple scale animation on input
+                    input.style.transform = 'scale(1.05)';
+                    setTimeout(() => input.style.transform = 'scale(1)', 200);
+                }
+            };
+        });
+    }
+
+    function syncActiveBidModal() {
+        const modal = document.getElementById('bidModal');
+        if (!modal || !modal.classList.contains('active')) return;
+
+        const propId = document.getElementById('bidPropertyId')?.value;
+        if (!propId) return;
+
+        const prop = EstatoStorage.getPropertyById(propId);
+        if (!prop || !prop.bidding) return;
+
+        const currentHighest = Number(prop.highestBid || prop.bidding.basePrice || 0);
+        const minNext = currentHighest + (prop.bidding.minIncrement || 10000);
+        const highBidEl = document.getElementById('currentHighBid');
+        const minNextEl = document.getElementById('minNextBid');
+
+        if (highBidEl) highBidEl.textContent = currencyFormatter.format(currentHighest);
+        if (minNextEl) minNextEl.textContent = currencyFormatter.format(minNext);
+        
+        // Refresh suggestions and history to match new highest bid
+        renderBidSuggestions(minNext);
+        renderBidHistory(prop);
+
+        // If auction ended or prop sold, close modal automatically
+        if (prop.status === 'Sold' || prop.bidding.finalized) {
+            modal.classList.remove('active');
+            showToast('This auction has concluded.', 'info');
+        }
+    }
+
+    function updateAllCountdowns() {
+        const timers = document.querySelectorAll('.auction-timer, .countdown-timer');
+        const nowTs = Date.now();
+        const now = new Date(nowTs);
+
+        timers.forEach(timer => {
+            const propId = timer.getAttribute('data-id') || timer.getAttribute('data-prop-id');
+            const endTimeStr = timer.getAttribute('data-end') || timer.getAttribute('data-end-time');
+            const startTimeStr = timer.getAttribute('data-start-time');
+            
+            if (!propId || !endTimeStr) return;
+
+            const endTimeTs = new Date(endTimeStr).getTime();
+            const startTimeTs = startTimeStr ? new Date(startTimeStr).getTime() : null;
+            const isPaymentTimer = timer.classList.contains('payment-timer');
+
+            let statusText = '';
+            let timerColor = isPaymentTimer ? 'inherit' : 'var(--danger)';
+
+            const prop = EstatoStorage.getPropertyById(propId);
+
+            if (startTimeTs && nowTs < startTimeTs) {
+                const diff = startTimeTs - nowTs;
+                statusText = 'Starts in: ' + formatTimeDiff(diff);
+                timerColor = 'var(--primary)';
+            } else if (nowTs >= endTimeTs) {
+                statusText = isPaymentTimer ? 'Expired' : 'Auction Closed';
+                timerColor = 'var(--text-muted)';
+                
+                // --- Atomic UI Disabling ---
+                // Stop bidding exactly at end time by disabling buttons in DOM
+                const bidBtn = document.querySelector(`.bid-btn[data-id="${propId}"]`);
+                if (bidBtn && !bidBtn.disabled) {
+                    bidBtn.disabled = true;
+                    bidBtn.innerHTML = '<i class="ph ph-clock"></i> Closed';
+                    bidBtn.classList.add('btn-disabled');
+                }
+
+                // Trigger finalization if auction ended but not yet finalized
+                if (prop && prop.status !== 'Sold' && prop.status !== 'PaymentPending' && !prop.bidding.finalized) {
+                    if (!_pendingFinalizations.has(propId)) {
+                        _pendingFinalizations.add(propId);
+                        EstatoStorage.finalizeAuction(propId).finally(() => _pendingFinalizations.delete(propId));
+                    }
+                }
+
+                // Monitor Payment Pending Window (if this is the deadline timer)
+                if (prop && prop.status === 'PaymentPending' && prop.bidding.paymentDeadline) {
+                    const deadlineTs = new Date(prop.bidding.paymentDeadline).getTime();
+                    if (nowTs >= deadlineTs) {
+                        if (!_pendingDefaults.has(propId)) {
+                            console.log(`[Timer] Payment deadline expired for ${propId}. Triggering default.`);
+                            _pendingDefaults.add(propId);
+                            EstatoStorage.reportWinnerDefault(propId).finally(() => _pendingDefaults.delete(propId));
+                        }
+                    }
+                }
+            } else {
+                const diff = endTimeTs - nowTs;
+                const prefix = isPaymentTimer ? 'Payment: ' : '';
+                statusText = prefix + formatTimeDiff(diff) + (isPaymentTimer ? '' : ' left');
+            }
+
+            // Efficiency: Only update DOM if text actually changed
+            const displayEl = timer.querySelector('.timer-display') || timer;
+            if (displayEl.textContent !== statusText) {
+                displayEl.textContent = statusText;
+                if (!isPaymentTimer) timer.style.color = timerColor;
+            }
+
+            // Also update the timer inside properties details if it matches
+            const detailTimer = document.getElementById('bidTimeLeft');
+            if (detailTimer && propId === document.getElementById('bidPropertyId')?.value) {
+                if (detailTimer.textContent !== statusText) {
+                    detailTimer.textContent = statusText;
+                    detailTimer.style.color = timerColor;
+                }
+            }
+        });
+    }
+
+    function formatTimeDiff(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
 
     function renderProfile() {
@@ -1703,6 +2352,7 @@ document.addEventListener('DOMContentLoaded', () => {
         viewContainer.innerHTML = html;
 
         document.getElementById('logoutBtn').addEventListener('click', () => {
+             if (countdownInterval) clearInterval(countdownInterval);
              EstatoStorage.logout();
              location.reload();
         });
@@ -2067,40 +2717,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- V11 Comparison Logic ---
+    // --- V11 Comparison Logic (delegates to early-registered window functions) ---
     function toggleCompare(id, event) {
-        if (event) event.stopPropagation();
-        
-        const prop = EstatoStorage.getPropertyById(id);
-        if (!prop) return;
-
-        const index = compareList.findIndex(p => p.id === id);
-
-        if (index === -1) {
-            if (compareList.length >= 3) {
-                showToast("You can compare a maximum of 3 properties side-by-side.", "warning");
-                return;
-            }
-            compareList.push(prop);
-        } else {
-            compareList.splice(index, 1);
-        }
-        
-        updateCompareTray();
-        saveCompareState();
-        syncCompareButtons(); // Ensure grid buttons match current list
+        // Delegate to the canonical window.toggleCompare registered at the top
+        window.toggleCompare(id, event);
     }
 
     function syncCompareButtons() {
-        document.querySelectorAll('.compare-btn').forEach(btn => {
-            const id = btn.getAttribute('data-id');
-            const inList = compareList.some(p => p.id === id);
-            if (inList) {
-                btn.classList.add('active', 'btn-primary');
-            } else {
-                btn.classList.remove('active', 'btn-primary');
-            }
-        });
+        _syncCompareIcons();
     }
 
     function saveCompareState() {
@@ -2109,39 +2733,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateCompareTray() {
-        const tray = document.getElementById('compareTray');
-        const count = document.getElementById('compareCount');
-        const listTray = document.getElementById('compareListTray');
-        const modal = document.getElementById('compareModal');
-        const modalContent = modal?.querySelector('.modal');
-
-        count.textContent = compareList.length;
-
-        if (compareList.length > 0) {
-            tray.classList.add('active');
-            tray.style.transform = 'translateX(-50%) translateY(0)';
-            listTray.innerHTML = compareList.map(p => `
-                <div class="compare-pill">
-                    <span>${p.title.substring(0, 15)}...</span>
-                    <i class="ph ph-x-circle" style="cursor:pointer;" onclick="window.toggleCompare('${p.id}')"></i>
-                </div>
-            `).join('');
-            listTray.innerHTML += `
-                <button class="btn btn-icon btn-danger-soft" onclick="window.clearCompare()" title="Clear All Comparison" style="margin-left: 0.5rem;">
-                    <i class="ph ph-trash"></i>
-                </button>
-            `;
-        } else {
-            tray.classList.remove('active');
-            tray.style.transform = 'translateX(-50%) translateY(150%)';
-        }
+        _updateCompareTray();
     }
 
     window.clearCompare = () => {
         compareList = [];
         saveCompareState();
         updateCompareTray();
-        syncCompareButtons();
+        _syncCompareIcons();
     };
 
     function renderComparisonTable() {
@@ -2220,8 +2819,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Expose to global for HTML string events
-    window.toggleCompare = toggleCompare;
-    window.renderComparisonTable = renderComparisonTable;
+    // NOTE: window.toggleCompare and window.renderComparisonTable are registered early (line ~62)
+    // to ensure they exist before the first renderView() call. DO NOT re-assign them here.
     window.dispatchCardClick = (id) => {
         const prop = EstatoStorage.getPropertyById(id);
         if (!prop) return;
@@ -2233,7 +2832,15 @@ document.addEventListener('DOMContentLoaded', () => {
         updateSeoMetadata(prop);
     };
 
-    window.openPropertyDetails = (prop) => {
+    window.closePropertyDetailsModal = () => {
+        document.getElementById('propertyDetailsModal').classList.remove('active');
+        window.history.pushState({}, '', '/');
+    };
+
+    window.openPropertyDetails = (prop, skipPushState = false) => {
+        if (!skipPushState) {
+            window.history.pushState({ propId: prop.id }, '', '/property/' + prop.id);
+        }
         document.getElementById('detailsTitle').textContent = prop.title;
         document.getElementById('detailsLocation').innerHTML = `<i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}`;
         
@@ -2309,10 +2916,55 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
         }
-        document.getElementById('detailsRatingsContainer').innerHTML = ratingsHtml;
+        const ratingsContainer = document.getElementById('detailsRatingsContainer');
+        if (ratingsContainer) ratingsContainer.innerHTML = ratingsHtml;
+ 
+        // NEW: Bidding Activity
+        let biddingHtml = '';
+        if (prop.bidding && prop.bidding.enabled) {
+            const bids = EstatoStorage.getBidsByProperty(prop.id) || [];
+            biddingHtml = `
+                <div style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h4 style="font-size: 1.1rem; color: var(--text-main); margin: 0;">Bidding Activity</h4>
+                        ${bids.length > 0 ? `<button class="btn btn-secondary btn-sm" onclick="window.viewFullHistory('${prop.id}')">View All Bids</button>` : ''}
+                    </div>
+                    <div id="detailsBidHistory" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        ${bids.slice().reverse().slice(0, 3).map(bid => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; background: var(--bg-hover); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--primary-light); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.7rem;">
+                                        ${bid.userName.charAt(0)}
+                                    </div>
+                                    <span style="font-size: 0.85rem; font-weight: 600;">${escapeHtml(bid.userName)}</span>
+                                </div>
+                                <div style="font-weight: 700; font-size: 0.9rem; color: var(--text-main);">${currencyFormatter.format(bid.amount)}</div>
+                            </div>
+                        `).join('') || '<p style="text-align: center; color: var(--text-muted); font-size: 0.85rem;">No bids placed yet.</p>'}
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Find or create bidding container in modal
+        let bContainer = document.getElementById('detailsBiddingSection');
+        if (!bContainer) {
+            bContainer = document.createElement('div');
+            bContainer.id = 'detailsBiddingSection';
+            if (ratingsContainer) ratingsContainer.after(bContainer);
+        }
+        bContainer.innerHTML = biddingHtml;
 
         // Footer Price & Buttons
-        document.getElementById('detailsPrice').innerHTML = `${currencyFormatter.format(prop.price)} <span style="font-size:1rem; color:var(--text-muted); font-weight:500;">${prop.type === 'Rent' ? '/ mo' : ''}</span>`;
+        if (prop.bidding && prop.bidding.enabled) {
+            const currentHighest = prop.highestBid || prop.bidding.basePrice || prop.price;
+            document.getElementById('detailsPrice').innerHTML = `
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 2px;">Highest Bid</div>
+                ${currencyFormatter.format(currentHighest)}
+            `;
+        } else {
+            document.getElementById('detailsPrice').innerHTML = `${currencyFormatter.format(prop.price)} <span style="font-size:1rem; color:var(--text-muted); font-weight:500;">${prop.type === 'Rent' ? '/ mo' : ''}</span>`;
+        }
         
         const role = currentUser ? currentUser.role : 'Buyer';
         const userId = currentUser ? currentUser.id : null;
@@ -2323,6 +2975,15 @@ document.addEventListener('DOMContentLoaded', () => {
         let btnHtml = '';
         if (isOwnerOfListing) {
             btnHtml = ``;
+        } else if (prop.bidding && prop.bidding.enabled) {
+            btnHtml = `
+                <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
+                    <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
+                </button>
+                <button class="btn btn-primary shadow-hover" onclick="window.openBidModal('${prop.id}')" style="gap:0.5rem; flex: 1.5;">
+                    <i class="ph ph-gavel"></i> Place Bid
+                </button>
+            `;
         } else {
             btnHtml = `
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
@@ -2354,6 +3015,36 @@ document.addEventListener('DOMContentLoaded', () => {
                 favBtn.querySelector('i').className = isNowFav ? 'ph-fill ph-heart' : 'ph ph-heart';
                 renderView(currentView, searchInput.value); // Re-render background grid silently
             });
+        }
+
+        // Populate Bidding History
+        const bidHistorySection = document.getElementById('detailsBidHistorySection');
+        if (prop.bidding && prop.bidding.enabled && bidHistorySection) {
+            bidHistorySection.style.display = 'block';
+            const bidList = document.getElementById('bidHistoryList');
+            const bids = prop.bids ? Object.values(prop.bids).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)) : [];
+            
+            document.getElementById('bidCountBadge').textContent = `${bids.length} bid${bids.length !== 1 ? 's' : ''}`;
+
+            if (bids.length === 0) {
+                bidList.innerHTML = `<p style="font-size:0.85rem; color:var(--text-muted); font-style:italic;">No bids placed yet. Be the first!</p>`;
+            } else {
+                bidList.innerHTML = bids.slice(0, 5).map(bid => `
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-main); padding:0.6rem 0.85rem; border-radius:var(--radius-sm); border:1px solid var(--border-color);">
+                        <div>
+                            <div style="font-weight:600; font-size:0.85rem; color:var(--text-main);">${escapeHtml(bid.userName)}</div>
+                            <div style="font-size:0.7rem; color:var(--text-muted);">${new Date(bid.timestamp).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</div>
+                        </div>
+                        <div style="font-weight:700; color:var(--success); font-size:0.9rem;">${currencyFormatter.format(bid.amount)}</div>
+                    </div>
+                `).join('');
+                
+                if (bids.length > 5) {
+                    bidList.innerHTML += `<p style="font-size:0.78rem; color:var(--primary); text-align:center; margin-top:0.25rem;">+ ${bids.length - 5} more bids</p>`;
+                }
+            }
+        } else if (bidHistorySection) {
+            bidHistorySection.style.display = 'none';
         }
 
         document.getElementById('propertyDetailsModal').classList.add('active');
@@ -2398,12 +3089,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         parent.querySelectorAll('.compare-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                const id = e.currentTarget.getAttribute('data-id');
+                toggleCompare(id, e);
+            });
+        });
+
+        parent.querySelectorAll('.bid-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const id = e.currentTarget.getAttribute('data-id');
-                toggleCompare(id);
-                // Toggle active class visually immediately
-                btn.classList.toggle('active');
-                btn.classList.toggle('btn-primary');
+                window.openBidModal(id);
             });
         });
 
@@ -2492,34 +3187,40 @@ document.addEventListener('DOMContentLoaded', () => {
         const unreadCount = notifs.filter(n => !n.read).length;
 
         // Update Badge
-        if (unreadCount > 0) {
-            notifBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
-            notifBadge.classList.remove('hidden');
-        } else {
-            notifBadge.classList.add('hidden');
+        const notifBadge = document.getElementById('notifBadge');
+        if (notifBadge) {
+            if (unreadCount > 0) {
+                notifBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+                notifBadge.classList.remove('hidden');
+            } else {
+                notifBadge.classList.add('hidden');
+            }
         }
 
         // Render List
-        if (notifs.length === 0) {
-            notifList.innerHTML = `<div class="empty-notif"><i class="ph-duotone ph-bell-slash"></i><p>No notifications yet</p></div>`;
-            return;
-        }
+        const notifList = document.getElementById('notifList');
+        if (notifList) {
+            if (notifs.length === 0) {
+                notifList.innerHTML = `<div class="empty-notif"><i class="ph-duotone ph-bell-slash"></i><p>No notifications yet</p></div>`;
+                return;
+            }
 
-        notifList.innerHTML = notifs.map(n => {
-            let iconClass = 'ph-info';
-            if (n.type === 'price_update') iconClass = 'ph-tag';
-            if (n.type === 'new_listing') iconClass = 'ph-house-line';
+            notifList.innerHTML = notifs.map(n => {
+                let iconClass = 'ph-info';
+                if (n.type === 'price_update') iconClass = 'ph-tag';
+                if (n.type === 'new_listing') iconClass = 'ph-house-line';
 
-            return `
-                <div class="notif-item ${n.read ? '' : 'unread'}" onclick="window.dispatchNotifClick('${n.meta ? n.meta.id : ''}')">
-                    <div class="notif-icon"><i class="ph-duotone ${iconClass}"></i></div>
-                    <div class="notif-content">
-                        <p>${escapeHtml(n.message)}</p>
-                        <span class="notif-time">${new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                return `
+                    <div class="notif-item ${n.read ? '' : 'unread'}" onclick="window.dispatchNotifClick('${n.meta ? n.meta.id : ''}')">
+                        <div class="notif-icon"><i class="ph-duotone ${iconClass}"></i></div>
+                        <div class="notif-content">
+                            <p>${escapeHtml(n.message)}</p>
+                            <span class="notif-time">${new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
                     </div>
-                </div>
-            `;
-        }).join('');
+                `;
+            }).join('');
+        }
     }
 
     window.dispatchNotifClick = (propertyId) => {

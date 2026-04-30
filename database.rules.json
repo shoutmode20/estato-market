@@ -2,19 +2,14 @@
   "rules": {
     "users": {
       "$uid": {
-        ".read": "auth != null && $uid === auth.uid",
-        ".write": "auth != null && $uid === auth.uid",
-        ".validate": "newData.hasChildren(['id', 'name', 'email', 'role'])",
-        "role": {
-          ".validate": "newData.val() === 'Buyer' || newData.val() === 'Seller' || (auth != null && root.child('users').child(auth.uid).child('role').val() === 'Admin')"
-        }
+        ".read": "auth != null",
+        ".write": "auth != null && $uid === auth.uid && (!newData.child('balance').exists() || newData.child('balance').val() === data.child('balance').val()) && (!newData.child('role').exists() || newData.child('role').val() === data.child('role').val()) && (!newData.child('reputation').exists() || newData.child('reputation').val() === data.child('reputation').val()) && (!newData.child('isBanned').exists() || newData.child('isBanned').val() === data.child('isBanned').val()) && (!newData.child('strikes').exists() || newData.child('strikes').val() === data.child('strikes').val())"
       }
     },
     "properties": {
       ".read": "auth != null",
       "$propId": {
-        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'Admin')))",
-        ".validate": "newData.hasChildren(['title', 'price', 'city', 'ownerId'])"
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid))) && (!newData.child('highestBid').exists() || newData.child('highestBid').val() === data.child('highestBid').val()) && (!newData.child('highestBidderId').exists() || newData.child('highestBidderId').val() === data.child('highestBidderId').val()) && (!newData.child('winnerId').exists() || newData.child('winnerId').val() === data.child('winnerId').val())"
       }
     },
     "favorites": {

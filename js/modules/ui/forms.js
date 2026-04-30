@@ -1,4 +1,4 @@
-import { initModalMap } from './map-engine.js';
+import { initModalMap, destroyModalMap } from './map-engine.js';
 import { showToast } from './utils.js';
 
 export function initForms(ctx) {
@@ -68,11 +68,27 @@ export function initForms(ctx) {
             document.getElementById('propPinCode').value = property.pinCode || '';
             document.getElementById('propLat').value = property.lat || '';
             document.getElementById('propLng').value = property.lng || '';
+            
+            // Populate bidding fields
+            if (property.bidding && property.bidding.enabled) {
+                document.getElementById('propBiddingEnabled').checked = true;
+                document.getElementById('biddingFields').style.display = 'block';
+                document.getElementById('propBidStart').value = property.bidding.startTime ? property.bidding.startTime.substring(0, 16) : '';
+                document.getElementById('propBidEnd').value = property.bidding.endTime ? property.bidding.endTime.substring(0, 16) : '';
+                document.getElementById('propBidIncrement').value = property.bidding.minIncrement || 10000;
+                document.getElementById('propBidEntryFee').value = property.bidding.entryFee || 5000;
+            } else {
+                document.getElementById('propBiddingEnabled').checked = false;
+                document.getElementById('biddingFields').style.display = 'none';
+            }
+
             const gLink = document.getElementById('propGoogleMapsLink');
             if (gLink) gLink.value = '';
         } else {
             modalTitle.textContent = 'Publish New Listing';
             document.getElementById('propId').value = '';
+            document.getElementById('propBiddingEnabled').checked = false;
+            document.getElementById('biddingFields').style.display = 'none';
         }
 
         // Always scroll modal body back to top so Title + Image fields are visible
@@ -90,14 +106,8 @@ export function initForms(ctx) {
 
     function closeModal() {
         propertyModal.classList.remove('active');
-        // Clean up modal marker so next openModal() starts fresh
-        if (window.modalMarker && window.modalMap) {
-            window.modalMap.removeLayer(window.modalMarker);
-            window.modalMarker = null;
-        }
-        // Re-show the click-tip for the next time the modal is opened
-        const tip = document.getElementById('mapClickTip');
-        if (tip) tip.style.display = '';
+        // Properly destroy the modal map so next openModal() starts fresh
+        destroyModalMap();
     }
 
     async function handleFormSubmit(e) {
@@ -133,9 +143,46 @@ export function initForms(ctx) {
             type: document.getElementById('propType').value,
             status: (currentUser && currentUser.role === 'Admin') ? document.getElementById('propStatus').value : 'Pending',
             category: document.getElementById('propCategory').value,
-            description: document.getElementById('propDescription').value.trim(),
             images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
         };
+
+        // Bidding Logic
+        const biddingEnabled = document.getElementById('propBiddingEnabled').checked;
+        if (biddingEnabled) {
+            const startTime = document.getElementById('propBidStart').value;
+            const endTime = document.getElementById('propBidEnd').value;
+            const minIncrement = Number(document.getElementById('propBidIncrement').value);
+            const entryFee = Number(document.getElementById('propBidEntryFee').value);
+
+            if (!startTime || !endTime) {
+                showToast('Please set both start and end times for the auction.', 'warning');
+                return;
+            }
+
+            const start = new Date(startTime);
+            const end = new Date(endTime);
+            const diffDays = (end - start) / (1000 * 3600 * 24);
+
+            if (diffDays <= 0) {
+                showToast('Auction must end after it starts.', 'warning');
+                return;
+            }
+            if (diffDays > 10) {
+                showToast('Auction duration cannot exceed 10 days.', 'warning');
+                return;
+            }
+
+            newProperty.bidding = {
+                enabled: true,
+                startTime: start.toISOString(),
+                endTime: end.toISOString(),
+                minIncrement: minIncrement,
+                entryFee: entryFee,
+                basePrice: price // Use property value as base price
+            };
+        } else {
+            newProperty.bidding = { enabled: false };
+        }
 
         // Show loading state on the submit button to prevent double-submits
         const submitBtn = propertyForm.querySelector('[type="submit"]');
@@ -173,5 +220,14 @@ export function initForms(ctx) {
     }
 
     window.populateCitiesDatalist = populateCitiesDatalist;
+
+    // Attach bidding toggle listener
+    const biddingToggle = document.getElementById('propBiddingEnabled');
+    if (biddingToggle) {
+        biddingToggle.addEventListener('change', (e) => {
+            document.getElementById('biddingFields').style.display = e.target.checked ? 'block' : 'none';
+        });
+    }
+
     return { openModal, closeModal, handleFormSubmit, populateCitiesDatalist };
 }

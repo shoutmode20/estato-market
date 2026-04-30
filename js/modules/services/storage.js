@@ -30,8 +30,9 @@ try {
 // Store OAuth Credential Memory
 let _driveAccessToken = null;
 
-// In-memory cache for instant UI rendering
+// In-memory state cache — single source of truth
 let _memCache = {
+    _lastUpdated: 0,
     currentUser: null,
     properties: [],
     cities: ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune'],
@@ -39,11 +40,13 @@ let _memCache = {
     inquiries: [],
     notifications: [],
     activities: [],
-    reviews: []
+    reviews: [],
+    recentViews: []
 };
 
 let _syncCallback = null;
 let _listenersInitialized = false;  // Guard: prevent stacking duplicate realtime listeners on re-auth
+let _isSubmittingBid = false;       // Local lock to prevent duplicate submissions
 let _dataChangeListeners = [];
 
 // Tracks every active Firebase .on() listener so they can be cleanly removed on logout.
@@ -65,6 +68,194 @@ const currencyFormatter = new Intl.NumberFormat('en-IN', {
     maximumFractionDigits: 0
 });
 
+// ─── Private State Management ──────────────────────────────────────
+function _setState(updates) {
+    Object.assign(_memCache, updates);
+    _memCache._lastUpdated = Date.now();
+    
+    // Invalidate/Sync to LocalStorage for persistence
+    // We store the relevant pieces of state to allow instant startup
+    const cacheData = {
+        _lastUpdated: _memCache._lastUpdated,
+        currentUser: _memCache.currentUser,
+        properties: _memCache.properties,
+        cities: _memCache.cities,
+        favorites: _memCache.favorites,
+        notifications: _memCache.notifications,
+        recentViews: _memCache.recentViews
+    };
+    
+    try {
+        localStorage.setItem('estato_cache_v12', JSON.stringify(cacheData));
+        
+        // Individual legacy keys for backward compatibility or simple reads
+        if (updates.favorites) _syncToLocal('favorites', updates.favorites);
+        if (updates.currentUser) _syncToLocal('currentUser', updates.currentUser);
+    } catch (e) {
+        console.warn("[Storage] Cache sync failed (likely quota exceeded):", e);
+    }
+    
+    EstatoStorage.notifyListeners();
+}
+
+/**
+ * Centralized RBAC Guard.
+ * @param {string} action - Action name (e.g., 'CREATE_PROPERTY')
+ * @param {string|null} propertyId - Optional property ID for ownership checks
+ * @returns {boolean}
+ */
+function _can(action, propertyId = null) {
+    const user = _memCache.currentUser;
+    if (!user) return false;
+
+    const role = user.role;
+    const isAdmin = role === 'Admin';
+    const isSeller = role === 'Seller';
+    const isBuyer = role === 'Buyer';
+
+    switch (action) {
+        case 'CREATE_PROPERTY':
+            return isAdmin || isSeller;
+            
+        case 'MODIFY_PROPERTY':
+        case 'DELETE_PROPERTY':
+            if (isAdmin) return true;
+            if (!isSeller || !propertyId) return false;
+            const prop = _memCache.properties.find(p => p.id === propertyId);
+            return prop && prop.ownerId === user.id;
+
+        case 'APPROVE_PROPERTY':
+        case 'MANAGE_USERS':
+        case 'ADMIN_ONLY':
+            return isAdmin;
+
+        case 'PLACE_BID':
+            return isAdmin || isBuyer;
+
+        default:
+            return false;
+    }
+}
+
+/**
+ * Loads data from localStorage if it's less than 10 minutes old.
+ * @returns {boolean} True if valid cache was loaded.
+ */
+function _loadFromPersistentCache() {
+    try {
+        const raw = localStorage.getItem('estato_cache_v12');
+        if (!raw) return false;
+
+        const cache = JSON.parse(raw);
+        const now = Date.now();
+        const tenMinutes = 10 * 60 * 1000;
+
+        if (now - (cache._lastUpdated || 0) < tenMinutes) {
+            console.log("[Storage] Loading valid cache (Age: " + Math.round((now - cache._lastUpdated)/1000) + "s)");
+            Object.assign(_memCache, cache);
+            return true;
+        } else {
+            console.log("[Storage] Cache expired. Clearing...");
+            localStorage.removeItem('estato_cache_v12');
+            return false;
+        }
+    } catch (e) {
+        console.error("[Storage] Failed to load cache:", e);
+        return false;
+    }
+}
+
+function _syncToLocal(key, data) {
+    try {
+        localStorage.setItem(`estato_${key}_v12`, JSON.stringify(data));
+    } catch (e) {
+        console.warn(`[Storage] LocalSync failed for ${key}:`, e.message);
+    }
+}
+
+// ─── Cloud Sync: Debounced Write Queue ─────────────────────────────────────
+// All routine writes are batched here and flushed as a single atomic
+// Firebase multi-path update(), preventing partial writes and redundant calls.
+
+const _cloudWriteQueue = new Map(); // path -> data (null = delete)
+const _rollbackSnapshot = new Map(); // Stores a memCache key snapshot for rollback
+let _cloudFlushTimer = null;
+const CLOUD_DEBOUNCE_MS = 500;
+
+/**
+ * Queue a path for cloud write. Null data = delete the path.
+ * @param {string} path - Firebase path
+ * @param {*} data - Data to write, or null to remove
+ */
+function _queueCloudWrite(path, data) {
+    _cloudWriteQueue.set(path, data);
+    if (_cloudFlushTimer) clearTimeout(_cloudFlushTimer);
+    _cloudFlushTimer = setTimeout(_flushCloudQueue, CLOUD_DEBOUNCE_MS);
+}
+
+/**
+ * Flush all queued writes to Firebase as a single atomic multi-path update.
+ * Removes are handled separately since update() cannot set a path to null.
+ */
+async function _flushCloudQueue() {
+    if (!db || _cloudWriteQueue.size === 0) return;
+    _cloudFlushTimer = null;
+
+    // Snapshot and clear queue atomically
+    const ops = new Map(_cloudWriteQueue);
+    _cloudWriteQueue.clear();
+
+    const batchUpdates = {};
+    const removes = [];
+
+    for (const [path, data] of ops.entries()) {
+        if (data === null || data === undefined) {
+            removes.push(path);
+        } else {
+            batchUpdates[path] = data;
+        }
+    }
+
+    if (_syncCallback) _syncCallback('syncing');
+    try {
+        const writes = [];
+        if (Object.keys(batchUpdates).length > 0) {
+            writes.push(db.ref('/').update(batchUpdates));
+        }
+        for (const path of removes) {
+            writes.push(db.ref(path).remove());
+        }
+        await Promise.all(writes);
+        if (_syncCallback) _syncCallback('synced');
+    } catch (e) {
+        console.error('[Storage] Cloud flush failed:', e);
+        // Do NOT re-queue — this would cause an infinite retry loop.
+        // Firebase realtime listeners will reconcile the correct server state.
+        if (_syncCallback) _syncCallback('error');
+    }
+}
+
+/**
+ * For immediate (non-debounced) cloud operations like transactions.
+ * Use sparingly — prefer `_queueCloudWrite` for regular mutations.
+ */
+async function _syncToCloud(path, data, type = 'update') {
+    if (!db) return;
+    try {
+        if (type === 'set') {
+            await db.ref(path).set(data);
+        } else if (type === 'remove') {
+            await db.ref(path).remove();
+        } else {
+            await db.ref(path).update(data);
+        }
+        return true;
+    } catch (e) {
+        console.error(`[Storage] CloudSync failed for ${path}:`, e.message);
+        throw e;
+    }
+}
+
 // ─── Public Storage API ───────────────────────────────────────────
 export const EstatoStorage = {
     getCurrentUser() { return _memCache.currentUser; },
@@ -72,6 +263,23 @@ export const EstatoStorage = {
     async initDrive(syncCb) {
         _syncCallback = syncCb;
         return true;
+    },
+    async checkAuth() {
+        // Attempt to pre-load from cache for instant UI
+        _loadFromPersistentCache();
+
+        try {
+            const rawUser = localStorage.getItem('estato_currentUser_v12');
+            if (rawUser) {
+                const user = JSON.parse(rawUser);
+                _memCache.currentUser = user;
+                this.loadAllData();
+                return user;
+            }
+        } catch (e) {
+            console.warn('[Storage] Failed to read cached user:', e);
+        }
+        return null;
     },
 
     /** Central Login Entry Point */
@@ -90,7 +298,12 @@ export const EstatoStorage = {
                     });
                     user = auth.currentUser;
                 } else {
-                    const result = await auth.signInWithPopup(provider);
+                    const provider = new firebase.auth.GoogleAuthProvider();
+                    const result = await firebase.auth().signInWithPopup(provider);
+                    
+                    // On fresh login, clear old cache to ensure no data mixing
+                    localStorage.removeItem('estato_cache_v12');
+                    
                     user = result.user;
                     if (result.credential && result.credential.accessToken) {
                         _driveAccessToken = result.credential.accessToken;
@@ -124,28 +337,50 @@ export const EstatoStorage = {
                 }
             }
 
+            let dbUserData = {};
             if (!userSnap.exists()) {
-                // First time sign-up
-                await userRef.set({
+                // First time sign-up — initialize all fields including reputation
+                dbUserData = {
                     id: user.uid,
                     name: user.displayName,
                     email: user.email,
                     picture: user.photoURL,
-                    role: selectedRole
-                });
+                    role: selectedRole,
+                    balance: 100000,
+                    reputation: 5.0,
+                    strikes: 0,
+                    isBanned: false
+                };
+                await userRef.set(dbUserData);
             } else {
-                // Welcome back!
-                const data = userSnap.val();
-                roleToUse = data.role || selectedRole;
+                // Welcome back — read full profile from DB
+                dbUserData = userSnap.val();
+                roleToUse = dbUserData.role || selectedRole;
             }
 
-            _memCache.currentUser = {
-                id: user.uid,
-                name: user.displayName,
-                email: user.email,
-                picture: user.photoURL,
-                role: roleToUse
-            };
+            // 1.1 Handle Virtual Wallet Balance (for existing users who predate wallet)
+            let balance = dbUserData.balance;
+            if (balance === undefined) {
+                balance = 100000;
+                await db.ref('users/' + user.uid + '/balance').set(balance);
+            }
+
+            // Hydrate full user profile including auction-safety fields
+            const recentViews = JSON.parse(localStorage.getItem(`estato_recent_v1_${user.uid}`) || '[]');
+            _setState({
+                currentUser: {
+                    id: user.uid,
+                    name: user.displayName,
+                    email: user.email,
+                    picture: user.photoURL,
+                    role: roleToUse,
+                    balance: Number(balance),
+                    reputation: dbUserData.reputation !== undefined ? dbUserData.reputation : 5.0,
+                    strikes: dbUserData.strikes || 0,
+                    isBanned: dbUserData.isBanned || false
+                },
+                recentViews
+            });
 
             // 2. Hydrate Global Data (Properties are shared for all!)
             await this.loadAllData();
@@ -179,19 +414,17 @@ export const EstatoStorage = {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 self.mergeProperties(latestBatch);
-                self.notifyListeners();
             }, (err) => console.error("[Storage] Property Listener Error:", err.message));
 
             // 2. User-specific favorites
             _trackListener(db.ref('favorites/' + uid), (snap) => {
-                _memCache.favorites = snap.exists() ? (snap.val().ids || []) : [];
-                self.notifyListeners();
+                _setState({ favorites: snap.exists() ? (snap.val().ids || []) : [] });
             }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
 
             // 3. Inquiries — Private isolated sync for all users
             const _inquiryCacheMap = new Map();
             const updateCache = () => {
-                _memCache.inquiries = Array.from(_inquiryCacheMap.values())
+                const inquiries = Array.from(_inquiryCacheMap.values())
                     .sort((a,b) => {
                         const getLatestDate = (inq) => {
                             if (inq.replies && inq.replies.length > 0) {
@@ -202,7 +435,7 @@ export const EstatoStorage = {
                         };
                         return getLatestDate(b) - getLatestDate(a);
                     });
-                self.notifyListeners();
+                _setState({ inquiries });
             };
 
             console.log(`[Storage] Initializing secure PRIVATE inquiry listener for ${uid}`);
@@ -243,20 +476,17 @@ export const EstatoStorage = {
 
             // 4. Personal notifications
             _trackListener(db.ref('notifications/' + uid), (snap) => {
-                _memCache.notifications = snap.exists() ? (snap.val().items || []) : [];
-                self.notifyListeners();
+                _setState({ notifications: snap.exists() ? (snap.val().items || []) : [] });
             }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
 
             // 5. Platform activity feed (latest 100, admin-read-only in DB rules)
             _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
-                _memCache.activities = snap.exists() ? Object.values(snap.val()).reverse() : [];
-                self.notifyListeners();
+                _setState({ activities: snap.exists() ? Object.values(snap.val()).reverse() : [] });
             }, (err) => console.error("[Storage] Activity Listener Error:", err.message));
 
             // 6. Reviews
             _trackListener(db.ref('reviews'), (snap) => {
-                _memCache.reviews = snap.exists() ? Object.values(snap.val()) : [];
-                self.notifyListeners();
+                _setState({ reviews: snap.exists() ? Object.values(snap.val()) : [] });
             }, (err) => console.error("[Storage] Reviews Listener Error:", err.message));
 
         } catch (e) {
@@ -311,8 +541,8 @@ export const EstatoStorage = {
         _listenerHandles = [];
         _listenersInitialized = false;
 
+        _setState({ currentUser: null });
         auth.signOut();
-        _memCache.currentUser = null;
     },
 
     getData() { return _memCache; },
@@ -321,22 +551,16 @@ export const EstatoStorage = {
 
     /** RESTORE DATA FROM BACKUP */
     async restoreData(data) {
+        if (!_can('ADMIN_ONLY')) throw new Error("Access Denied: Administrative privileges required.");
         if (!data || typeof data !== 'object') return false;
-        // Security: Enforce admin-only restore on the client side
-        // (Firebase rules will also block non-admin writes at each child path)
-        if (!_memCache.currentUser || _memCache.currentUser.role !== 'Admin') {
-            console.error('[Estato] Unauthorized: restoreData() is restricted to Admins.');
-            return false;
-        }
         if (_syncCallback) _syncCallback('syncing');
 
         try {
             // Overwrite entire database (Careful!)
-            await db.ref().set(data);
+            await _syncToCloud('/', data, 'set');
 
             // Re-hydrate local cache
-            _memCache = { ..._memCache, ...data };
-            this.notifyListeners();
+            _setState({ ...data });
 
             if (_syncCallback) _syncCallback('synced');
             return true;
@@ -365,13 +589,14 @@ export const EstatoStorage = {
         const existing = new Map(_memCache.properties.map(p => [p.id, p]));
         newBatch.forEach(p => existing.set(p.id, p));
 
-        // Sort by date/ID descending
-        _memCache.properties = Array.from(existing.values())
-            .sort((a, b) => b.id.localeCompare(a.id));
-
         // Recompute cities
         const propCities = _memCache.properties.map(p => p.city).filter(Boolean);
-        _memCache.cities = [...new Set(['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune', ...propCities])];
+        const cities = [...new Set(['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Pune', ...propCities])];
+        
+        _setState({ 
+            properties: Array.from(existing.values()).sort((a, b) => b.id.localeCompare(a.id)),
+            cities
+        });
     },
 
     async loadMoreProperties() {
@@ -406,104 +631,77 @@ export const EstatoStorage = {
     },
 
     async addProperty(property) {
-        if (_syncCallback) _syncCallback('syncing');
+        if (!_can('CREATE_PROPERTY')) throw new Error("Access Denied: You do not have permission to list properties.");
+        const user = _memCache.currentUser;
         property.id = 'prop_' + Date.now();
-        property.ownerId = _memCache.currentUser.id;
-        property.ownerName = _memCache.currentUser.name || 'Estato User';
-        property.ownerPicture = _memCache.currentUser.picture || null;
+        property.ownerId = user.id;
+        property.ownerName = user.name || 'Estato User';
+        property.ownerPicture = user.picture || null;
         property.listedAt = new Date().toISOString();
         property.priceHistory = [{ price: property.price, date: new Date().toISOString() }];
 
-        // Enforce Pending status for new listings (Fraud Prevention)
-        if (_memCache.currentUser.role !== 'Admin') {
-            property.status = 'Pending';
-        }
+        if (user.role !== 'Admin') property.status = 'Pending';
 
-        // Optimistic UI Update
-        _memCache.properties.push(property);
-        if (property.city && !_memCache.cities.includes(property.city)) {
-            _memCache.cities.push(property.city);
-        }
+        // 1. memCache + localStorage — immediate
+        const properties = [..._memCache.properties, property];
+        const cities = [..._memCache.cities];
+        if (property.city && !cities.includes(property.city)) cities.push(property.city);
+        _setState({ properties, cities });
 
-        try {
-            await db.ref('properties/' + property.id).set(property);
-            this.addNotification(`New property listed: ${property.title}`, 'new_listing', { id: property.id });
-            this.logActivity('ADD_PROPERTY', `Added new ${property.category}: ${property.title}`);
-            if (_syncCallback) _syncCallback('synced');
-        } catch (e) {
-            console.error(e);
-            if (_syncCallback) _syncCallback('error');
-        }
+        // 2. Cloud — debounced
+        _queueCloudWrite('properties/' + property.id, property);
+
+        this.addNotification(`New property listed: ${property.title}`, 'new_listing', { id: property.id });
+        this.logActivity('ADD_PROPERTY', `Added new ${property.category}: ${property.title}`);
         return property;
     },
 
     async updateProperty(updatedProp) {
-        if (_syncCallback) _syncCallback('syncing');
+        if (!_can('MODIFY_PROPERTY', updatedProp.id)) throw new Error("Access Denied: You do not have permission to edit this listing.");
         const index = _memCache.properties.findIndex(p => p.id === updatedProp.id);
-        if (index !== -1) {
-            const prop = _memCache.properties[index];
-            const user = _memCache.currentUser;
+        if (index === -1) return false;
 
-            const isAuthorized = user && (user.role === 'Admin' || prop.ownerId === user.id);
-            if (!isAuthorized) return false;
+        const prop = _memCache.properties[index];
+        const user = _memCache.currentUser;
 
-            if (updatedProp.price && Number(updatedProp.price) !== Number(prop.price)) {
-                this.addNotification(`Price updated for ${prop.title}: ${currencyFormatter.format(updatedProp.price)}`, 'price_update', { id: prop.id });
-                if (!prop.priceHistory) prop.priceHistory = [];
-                prop.priceHistory.push({ price: Number(updatedProp.price), date: new Date().toISOString() });
-            }
-
-            // Optimistic update — snapshot for rollback if Firebase write fails
-            const _updateBackup = { ...prop, priceHistory: prop.priceHistory ? [...prop.priceHistory] : [] };
-            _memCache.properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId, ownerName: prop.ownerName, ownerPicture: prop.ownerPicture, listedAt: prop.listedAt, updatedAt: new Date().toISOString() };
-
-            try {
-                await db.ref('properties/' + updatedProp.id).update(_memCache.properties[index]);
-                this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
-                if (_syncCallback) _syncCallback('synced');
-            } catch (e) {
-                console.error('[Estato] updateProperty write failed, rolling back:', e);
-                // Rollback optimistic update so UI stays in sync with DB
-                _memCache.properties[index] = _updateBackup;
-                this.notifyListeners();
-                if (_syncCallback) _syncCallback('error');
-            }
-            return true;
+        if (updatedProp.price && Number(updatedProp.price) !== Number(prop.price)) {
+            this.addNotification(`Price updated for ${prop.title}: ${currencyFormatter.format(updatedProp.price)}`, 'price_update', { id: prop.id });
+            if (!prop.priceHistory) prop.priceHistory = [];
+            prop.priceHistory.push({ price: Number(updatedProp.price), date: new Date().toISOString() });
         }
-        return false;
+
+        // 1. memCache + localStorage — immediate
+        const properties = [..._memCache.properties];
+        properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId, ownerName: prop.ownerName, ownerPicture: prop.ownerPicture, listedAt: prop.listedAt, updatedAt: new Date().toISOString() };
+        _setState({ properties });
+
+        // 2. Cloud — debounced
+        _queueCloudWrite('properties/' + updatedProp.id, properties[index]);
+
+        this.logActivity('UPDATE_PROPERTY', `Updated ${prop.title} (${updatedProp.id})`);
+        return true;
     },
 
     async deleteProperty(id) {
-        if (_syncCallback) _syncCallback('syncing');
+        if (!_can('DELETE_PROPERTY', id)) throw new Error("Access Denied: You do not have permission to delete this listing.");
         const index = _memCache.properties.findIndex(p => p.id === id);
         if (index === -1) return false;
 
         const prop = _memCache.properties[index];
-        const isAuthorized = _memCache.currentUser && (_memCache.currentUser.role === 'Admin' || prop.ownerId === _memCache.currentUser.id);
-        if (!isAuthorized) return false;
 
-        // Snapshot the property for rollback before the optimistic delete
-        const _deleteBackup = { ...prop };
-        _memCache.properties.splice(index, 1);
-        try {
-            await db.ref('properties/' + id).remove();
-            this.logActivity('DELETE_PROPERTY', `Archived listing: ${prop.title} (${id})`);
+        // 1. memCache + localStorage — immediate (optimistic)
+        const properties = _memCache.properties.filter(p => p.id !== id);
+        _setState({ properties });
 
-            // If Admin deleted someone else's property, notify them
-            if (_memCache.currentUser.role === 'Admin' && prop.ownerId !== _memCache.currentUser.id) {
-                await this.sendUserNotification(prop.ownerId, `Your listing "${prop.title}" was removed by an Admin.`, 'danger', { id: id });
-            }
+        // 2. Cloud — debounced
+        _queueCloudWrite('properties/' + id, null); // null = delete
 
-            if (_syncCallback) _syncCallback('synced');
-            return true;
-        } catch (e) {
-            console.error('[Estato] deleteProperty write failed, rolling back:', e);
-            // Rollback: re-insert the property at its original position
-            _memCache.properties.splice(index, 0, _deleteBackup);
-            this.notifyListeners();
-            if (_syncCallback) _syncCallback('error');
-            return false;
+        this.logActivity('DELETE_PROPERTY', `Archived listing: ${prop.title} (${id})`);
+
+        if (_memCache.currentUser.role === 'Admin' && prop.ownerId !== _memCache.currentUser.id) {
+            this.sendUserNotification(prop.ownerId, `Your listing "${prop.title}" was removed by an Admin.`, 'danger', { id });
         }
+        return true;
     },
 
     async sendUserNotification(userId, message, type = 'info', meta = {}) {
@@ -525,50 +723,42 @@ export const EstatoStorage = {
     },
 
     async approveProperty(id) {
-        if (_syncCallback) _syncCallback('syncing');
-        if (_memCache.currentUser.role !== 'Admin') return false;
+        if (!_can('APPROVE_PROPERTY')) throw new Error("Access Denied: Administrative privileges required.");
 
         const index = _memCache.properties.findIndex(p => p.id === id);
         if (index === -1) return false;
 
-        _memCache.properties[index].status = 'Available';
+        // 1. memCache + localStorage
+        const properties = [..._memCache.properties];
+        properties[index] = { ...properties[index], status: 'Available' };
+        _setState({ properties });
 
-        try {
-            await db.ref('properties/' + id).update({ status: 'Available' });
-            this.logActivity('APPROVE_PROPERTY', `Admin approved listing: ${_memCache.properties[index].title}`);
-            // Force notification to the Seller (Owner)
-            await this.sendUserNotification(_memCache.properties[index].ownerId, `Listing Approved: ${_memCache.properties[index].title}`, 'success', { id: id });
-            if (_syncCallback) _syncCallback('synced');
-            return true;
-        } catch (e) {
-            console.error(e);
-            if (_syncCallback) _syncCallback('error');
-            return false;
-        }
+        // 2. Cloud
+        _queueCloudWrite('properties/' + id + '/status', 'Available');
+
+        this.logActivity('APPROVE_PROPERTY', `Admin approved listing: ${properties[index].title}`);
+        this.sendUserNotification(properties[index].ownerId, `Listing Approved: ${properties[index].title}`, 'success', { id });
+        return true;
     },
 
     async rejectProperty(id, reason = 'Did not meet marketplace guidelines.') {
-        if (_syncCallback) _syncCallback('syncing');
-        if (_memCache.currentUser.role !== 'Admin') return false;
+        if (!_can('APPROVE_PROPERTY')) throw new Error("Access Denied: Administrative privileges required.");
 
         const index = _memCache.properties.findIndex(p => p.id === id);
         if (index === -1) return false;
 
-        _memCache.properties[index].status = 'Rejected';
+        // 1. memCache + localStorage
+        const properties = [..._memCache.properties];
+        properties[index] = { ...properties[index], status: 'Rejected', rejectionReason: reason };
+        _setState({ properties });
 
-        try {
-            await db.ref('properties/' + id).update({ status: 'Rejected' });
-            this.logActivity('REJECT_PROPERTY', `Admin rejected listing: ${_memCache.properties[index].title}`);
-            // Force notification to the Seller (Owner)
-            await this.sendUserNotification(_memCache.properties[index].ownerId, `Your listing "${_memCache.properties[index].title}" was rejected. Reason: ${reason}`, 'warning', { id: id });
+        // 2. Cloud
+        _queueCloudWrite('properties/' + id + '/status', 'Rejected');
+        _queueCloudWrite('properties/' + id + '/rejectionReason', reason);
 
-            if (_syncCallback) _syncCallback('synced');
-            return true;
-        } catch (e) {
-            console.error(e);
-            if (_syncCallback) _syncCallback('error');
-            return false;
-        }
+        this.logActivity('REJECT_PROPERTY', `Admin rejected listing: ${properties[index].title} — ${reason}`);
+        this.sendUserNotification(properties[index].ownerId, `Listing Rejected: ${properties[index].title}. Reason: ${reason}`, 'danger', { id });
+        return true;
     },
 
 
@@ -576,17 +766,16 @@ export const EstatoStorage = {
     getFavorites() { return _memCache.favorites; },
 
     async toggleFavorite(id) {
-        if (_syncCallback) _syncCallback('syncing');
-        const index = _memCache.favorites.indexOf(id);
-        if (index === -1) _memCache.favorites.push(id);
-        else _memCache.favorites.splice(index, 1);
+        const favorites = [..._memCache.favorites];
+        const index = favorites.indexOf(id);
+        if (index === -1) favorites.push(id);
+        else favorites.splice(index, 1);
 
-        try {
-            await db.ref('favorites/' + _memCache.currentUser.id).set({ ids: _memCache.favorites });
-            if (_syncCallback) _syncCallback('synced');
-        } catch (e) {
-            if (_syncCallback) _syncCallback('error');
-        }
+        // 1. memCache + localStorage
+        _setState({ favorites });
+
+        // 2. Cloud
+        _queueCloudWrite('favorites/' + _memCache.currentUser.id, { ids: favorites });
     },
 
     // ── Cities / CRM ──
@@ -609,34 +798,15 @@ export const EstatoStorage = {
         inquiry.date = new Date().toISOString();
         inquiry.status = 'Unread';
 
-        _memCache.inquiries.push(inquiry);
+        const inquiries = [..._memCache.inquiries, inquiry];
+        _setState({ inquiries });
         try {
             console.log(`[Sync] 📤 Outbound Inquiry: ${inquiry.id} to ${inquiry.ownerId}`);
-            await db.ref('inquiries/' + inquiry.id).set(inquiry);
+            await _syncToCloud('inquiries/' + inquiry.id, inquiry, 'set');
 
             // Maintain a per-user index for privacy-compliant listings
-            await db.ref(`user_inquiries/${inquiry.buyerId}/${inquiry.id}`).set(true);
-            await db.ref(`user_inquiries/${inquiry.ownerId}/${inquiry.id}`).set(true);
-
-            /* 
-            // Add notification to the seller (Independently handled to prevent hangs)
-            try {
-                const notifRef = db.ref('notifications/' + inquiry.ownerId);
-                const docSnap = await notifRef.get();
-                let items = docSnap.exists() ? docSnap.val().items : [];
-                items.unshift({
-                    id: 'notif_' + Date.now(),
-                    message: `New Inquiry alert for ${inquiry.propertyTitle} from ${inquiry.buyerName}`,
-                    type: 'new_inquiry',
-                    meta: { id: inquiry.propertyId, ownerId: inquiry.ownerId },
-                    timestamp: new Date().toISOString(),
-                    read: false
-                });
-                await notifRef.set({ items: items });
-            } catch (notifErr) {
-                console.warn("[Storage] Failed to send cross-user inquiry notification:", notifErr.message);
-            }
-            */
+            await _syncToCloud(`user_inquiries/${inquiry.buyerId}/${inquiry.id}`, true, 'set');
+            await _syncToCloud(`user_inquiries/${inquiry.ownerId}/${inquiry.id}`, true, 'set');
 
             if (_syncCallback) _syncCallback('synced');
         } catch (e) {
@@ -651,7 +821,8 @@ export const EstatoStorage = {
         const index = _memCache.inquiries.findIndex(i => i.id === inquiryId);
         if (index === -1) return false;
 
-        const inquiry = _memCache.inquiries[index];
+        const inquiries = [..._memCache.inquiries];
+        const inquiry = inquiries[index];
         if (!inquiry.replies) inquiry.replies = [];
 
         replyPayload.id = 'reply_' + Date.now();
@@ -660,11 +831,10 @@ export const EstatoStorage = {
 
         // Update status for the other participants
         inquiry.status = 'Unread';
+        _setState({ inquiries });
 
         try {
             console.log(`[Sync] 📤 Outbound Reply: ${inquiryId}`);
-            await db.ref('inquiries/' + inquiryId + '/replies').set(inquiry.replies);
-
             /*
             // Add notification to the receiver (Independently handled to prevent hangs)
             try {
@@ -701,9 +871,8 @@ export const EstatoStorage = {
             if (!auth.currentUser) throw new Error("Authentication required");
             const uid = auth.currentUser.uid;
             // Only remove from the private index. Do NOT delete the shared 'inquiries' node.
-            await db.ref(`user_inquiries/${uid}/${id}`).remove();
+            await _syncToCloud(`user_inquiries/${uid}/${id}`, null, 'remove');
             
-            this.notifyListeners();
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
@@ -714,18 +883,17 @@ export const EstatoStorage = {
     },
 
     async purgeInquiryGlobal(id) {
-        if (_memCache.currentUser.role !== 'Admin') throw new Error("Unauthorized: Admin only.");
+        if (!_can('ADMIN_ONLY')) throw new Error("Access Denied: Administrative privileges required.");
         if (_syncCallback) _syncCallback('syncing');
         try {
             // 1. Remove from inquiries root
-            await db.ref(`inquiries/${id}`).remove();
+            await _syncToCloud(`inquiries/${id}`, null, 'remove');
             
             // 2. We don't necessarily have to find all user indexes to delete it (it will just fail silently when they try to load)
             // but we SHOULD remove it for the current admin too.
             const uid = auth.currentUser.uid;
-            await db.ref(`user_inquiries/${uid}/${id}`).remove();
+            await _syncToCloud(`user_inquiries/${uid}/${id}`, null, 'remove');
 
-            this.notifyListeners();
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
@@ -740,10 +908,11 @@ export const EstatoStorage = {
         if (index === -1) return false;
         if (_memCache.inquiries[index].status === 'Read') return true;
 
-        _memCache.inquiries[index].status = 'Read';
+        const inquiries = [..._memCache.inquiries];
+        inquiries[index].status = 'Read';
+        _setState({ inquiries });
         try {
-            await db.ref(`inquiries/${id}/status`).set('Read');
-            this.notifyListeners();
+            await _syncToCloud(`inquiries/${id}/status`, 'Read', 'set');
             return true;
         } catch (e) {
             console.error("[Storage] Failed to mark inquiry read:", e.message);
@@ -801,17 +970,19 @@ export const EstatoStorage = {
             timestamp: new Date().toISOString(),
             read: false
         };
-        _memCache.notifications.unshift(notification);
+        const notifications = [notification, ..._memCache.notifications];
+        _setState({ notifications });
 
         try {
-            await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
+            await _syncToCloud('notifications/' + _memCache.currentUser.id, { items: notifications }, 'set');
         } catch (e) { }
     },
 
     async markNotificationsRead() {
-        _memCache.notifications.forEach(n => n.read = true);
+        const notifications = _memCache.notifications.map(n => ({ ...n, read: true }));
+        _setState({ notifications });
         try {
-            await db.ref('notifications/' + _memCache.currentUser.id).set({ items: _memCache.notifications });
+            await _syncToCloud('notifications/' + _memCache.currentUser.id, { items: notifications }, 'set');
         } catch (e) { }
     },
 
@@ -832,12 +1003,32 @@ export const EstatoStorage = {
             timestamp: new Date().toISOString()
         };
 
-        _memCache.activities.unshift(activity);
-        if (_memCache.activities.length > 100) _memCache.activities = _memCache.activities.slice(0, 100);
+        let activities = [activity, ..._memCache.activities];
+        if (activities.length > 100) activities = activities.slice(0, 100);
+        _setState({ activities });
 
         try {
-            await db.ref('activities/' + activity.id).set(activity);
+            await _syncToCloud('activities/' + activity.id, activity, 'set');
         } catch (e) { }
+    },
+
+    async logAudit(action, details, metadata = {}) {
+        const user = _memCache.currentUser;
+        if (!user || !window.firebase || !firebase.auth().currentUser) return;
+
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            fetch('/api/audit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({ action, details, metadata })
+            }).catch(e => console.warn('[Storage] Audit background log failed:', e));
+        } catch (err) {
+            console.error('[Storage] Audit log preparation failed:', err);
+        }
     },
 
     getStats() {
@@ -853,6 +1044,8 @@ export const EstatoStorage = {
             forRent: 0, 
             pendingCount: 0,
             availableCount: 0,
+            activeAuctions: 0,
+            totalBids: 0,
             cityData: {}, 
             typeDistribution: { 'Sale': 0, 'Rent': 0 } 
         };
@@ -863,6 +1056,13 @@ export const EstatoStorage = {
             if (p.type === 'Rent') stats.forRent++;
             if (p.status === 'Pending') stats.pendingCount++;
             if (p.status === 'Available') stats.availableCount++;
+
+            if (p.bidding && p.bidding.enabled) {
+                const now = new Date();
+                const end = new Date(p.bidding.endTime);
+                if (now < end) stats.activeAuctions++;
+                if (p.bids) stats.totalBids += Object.keys(p.bids).length;
+            }
             
             stats.typeDistribution[p.type] = (stats.typeDistribution[p.type] || 0) + 1;
 
@@ -874,7 +1074,10 @@ export const EstatoStorage = {
         const avgPriceByCity = {};
         for (const city in stats.cityData) avgPriceByCity[city] = Math.round(stats.cityData[city].total / stats.cityData[city].count);
 
-        const userInquiries = this.getInquiries(user.id);
+        // Filter inquiries to only count those belonging to the current user
+        const userInquiries = this.getInquiries().filter(i =>
+            i.buyerId === user.id || i.ownerId === user.id
+        );
         
         return {
             totalProperties: stats.totalProperties,
@@ -886,10 +1089,18 @@ export const EstatoStorage = {
             marketAvg: stats.totalProperties > 0 ? Math.round(stats.totalValue / stats.totalProperties) : 0,
             pendingCount: stats.pendingCount,
             availableCount: stats.availableCount,
+            activeAuctions: stats.activeAuctions,
+            totalBids: stats.totalBids,
             avgPriceByCity: avgPriceByCity,
         };
     },
     getDashboardStats(uid) { return this.getStats(uid); },
+
+    getBidsByProperty(propertyId) {
+        const prop = this.getPropertyById(propertyId);
+        if (!prop || !prop.bids) return [];
+        return Object.values(prop.bids).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    },
 
     // ── Reviews Sync ──
     getReviewsByProperty(propertyId) {
@@ -932,9 +1143,10 @@ export const EstatoStorage = {
             date: new Date().toISOString()
         };
 
-        _memCache.reviews.push(review);
+        const reviews = [..._memCache.reviews, review];
+        _setState({ reviews });
         try {
-            await db.ref('reviews/' + review.id).set(review);
+            await _syncToCloud('reviews/' + review.id, review, 'set');
             if (_syncCallback) _syncCallback('synced');
         } catch (e) {
             if (_syncCallback) _syncCallback('error');
@@ -949,20 +1161,19 @@ export const EstatoStorage = {
         return { average: (sum / reviews.length).toFixed(1), count: reviews.length };
     },
 
-    // ── Recently Viewed (LocalStorage Only) ──
-    getRecentViews(userId) {
-        if (!userId) return [];
-        try { return JSON.parse(localStorage.getItem(`estato_recent_v1_${userId}`) || '[]'); } catch (e) { return []; }
+    // ── Recently Viewed ──
+    getRecentViews() {
+        return _memCache.recentViews;
     },
 
     addRecentView(userId, propertyId) {
         if (!userId || !propertyId) return;
-        try {
-            const current = this.getRecentViews(userId);
-            const filtered = current.filter(id => id !== propertyId);
-            const updated = [propertyId, ...filtered].slice(0, 10);
-            localStorage.setItem(`estato_recent_v1_${userId}`, JSON.stringify(updated));
-        } catch (e) { }
+        const current = [..._memCache.recentViews];
+        const filtered = current.filter(id => id !== propertyId);
+        const recentViews = [propertyId, ...filtered].slice(0, 10);
+        
+        _setState({ recentViews });
+        _syncToLocal(`recent_v1_${userId}`, recentViews);
     },
 
     // ── Google Drive Sync ──
@@ -1049,11 +1260,224 @@ export const EstatoStorage = {
 
         if (_syncCallback) _syncCallback('syncing');
         try {
-            await db.ref('users/' + user.id + '/role').set(newRole);
-            _memCache.currentUser.role = newRole;
+            await _syncToCloud('users/' + user.id + '/role', newRole, 'set');
+            const currentUser = { ..._memCache.currentUser, role: newRole };
+            _setState({ currentUser });
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
+            if (_syncCallback) _syncCallback('error');
+            throw e;
+        }
+    },
+
+    // ── Bidding & Wallet System ──
+    getWalletBalance() {
+        return _memCache.currentUser ? (_memCache.currentUser.balance || 0) : 0;
+    },
+
+    async addFunds(amount) {
+        const user = _memCache.currentUser;
+        if (!user) throw new Error('Authentication required');
+        const addAmount = Number(amount);
+        if (isNaN(addAmount) || addAmount <= 0) throw new Error('Invalid amount');
+
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            const newBalance = (user.balance || 0) + addAmount;
+            await _syncToCloud(`users/${user.id}/balance`, newBalance, 'set');
+            const currentUser = { ..._memCache.currentUser, balance: newBalance };
+            _setState({ currentUser });
+            this.logActivity('WALLET_DEPOSIT', `Added ₹${addAmount.toLocaleString()} to wallet`);
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            if (_syncCallback) _syncCallback('error');
+            throw e;
+        }
+    },
+
+    async payEntryFee(propertyId) {
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            const res = await fetch('/api/bidding/entry', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({ propertyId })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                throw new Error(data.error || 'Failed to pay entry fee.');
+            }
+            
+            this.logActivity('BID_ENTRY_FEE', `Paid entry fee for property.`);
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            if (_syncCallback) _syncCallback('error');
+            throw e;
+        }
+    },
+
+    validateBid(propertyId, amount) {
+        const user = _memCache.currentUser;
+        const prop = this.getPropertyById(propertyId);
+        if (!user) throw new Error('You must be logged in to place a bid.');
+        if (user.isBanned) throw new Error('Your account is banned from participating in auctions.');
+        if (!prop) throw new Error('Property not found.');
+
+        const bidData = prop.bidding;
+        if (!bidData || !bidData.enabled) throw new Error('Bidding is not active for this listing.');
+
+        // 1. Time Validation
+        const nowTs = Date.now();
+        const startTs = new Date(bidData.startTime).getTime();
+        const endTs = new Date(bidData.endTime).getTime();
+        if (nowTs < startTs) throw new Error('Bidding has not started yet.');
+        if (nowTs >= endTs) throw new Error('Bidding has already closed.');
+
+        // 2. Entry Fee Validation
+        const participants = bidData.participants || {};
+        if (!participants[user.id]) throw new Error('You must pay the entry fee to place a bid.');
+
+        // 3. Increment & Current High Bid Validation
+        const currentHighest = Number(prop.highestBid || bidData.basePrice || 0);
+        const minIncrement = Number(bidData.minIncrement || 10000);
+        const bidAmount = Number(amount);
+
+        if (isNaN(bidAmount) || bidAmount <= 0) throw new Error('Please enter a valid bid amount.');
+
+        if (bidAmount < currentHighest + minIncrement) {
+            throw new Error(`Minimum bid required is ₹${(currentHighest + minIncrement).toLocaleString()}.`);
+        }
+
+        // 4. Multiple of 10,000 Rule (As per requirements)
+        if (bidAmount % 10000 !== 0) {
+            throw new Error('Bid amount must be in multiples of ₹10,000.');
+        }
+
+        // 5. Balance Validation
+        if ((user.balance || 0) < bidAmount) {
+            throw new Error(`Insufficient wallet balance. You need ₹${bidAmount.toLocaleString()} but currently have ₹${(user.balance || 0).toLocaleString()}.`);
+        }
+
+        return { bidAmount, currentHighest, bidData };
+    },
+
+    async placeBid(propertyId, amount) {
+        if (_isSubmittingBid) throw new Error("A bid is already in progress. Please wait.");
+        if (!_can('PLACE_BID')) throw new Error("Access Denied: Only verified Buyers can place bids.");
+        
+        const { bidAmount } = this.validateBid(propertyId, amount);
+
+        _isSubmittingBid = true;
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            const res = await fetch('/api/bidding/place', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify({ propertyId, amount: bidAmount })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                this.logAudit('BID_FAILURE', data.error || 'Bid rejected.', { propertyId, amount });
+                throw new Error(data.error || 'Bid rejected.');
+            }
+            
+            this.logActivity('PLACE_BID', `Placed bid of ₹${bidAmount.toLocaleString()}`);
+            this.logAudit('BID_SUCCESS', `Bid successfully placed`, { propertyId, amount });
+            this.addNotification(`You placed a bid of ₹${bidAmount.toLocaleString()}`, 'success', { id: propertyId });
+            
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error('[Storage] placeBid error:', e);
+            if (_syncCallback) _syncCallback('error');
+            throw e;
+        } finally {
+            _isSubmittingBid = false;
+        }
+    },
+
+    async finalizeAuction(propertyId) {
+        if (!_can('MODIFY_PROPERTY', propertyId)) return false;
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            const res = await fetch('/api/bidding/finalize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                body: JSON.stringify({ propertyId })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || 'Failed to finalize auction.');
+            
+            this.logActivity('AUCTION_FINALIZED', `Auction finalized via server API.`);
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error('[Storage] finalizeAuction error:', e);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
+    async confirmAuctionPayment(propertyId) {
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            const res = await fetch('/api/bidding/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                body: JSON.stringify({ propertyId })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || 'Failed to confirm payment.');
+            
+            this.logActivity('PAYMENT_CONFIRMED', `Payment confirmed via server API.`);
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error('[Storage] confirmAuctionPayment error:', e);
+            if (_syncCallback) _syncCallback('error');
+            throw e;
+        }
+    },
+
+    async reportWinnerDefault(propertyId) {
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            const idToken = await firebase.auth().currentUser.getIdToken();
+            const res = await fetch('/api/bidding/default', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                body: JSON.stringify({ propertyId })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || 'Failed to report default.');
+            
+            this.logActivity('USER_STRIKE', `Winner default processed via server API.`);
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error('[Storage] reportWinnerDefault error:', e);
             if (_syncCallback) _syncCallback('error');
             throw e;
         }

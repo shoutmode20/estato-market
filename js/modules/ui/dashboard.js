@@ -31,7 +31,7 @@ export function renderDashboard(ctx) {
                 <div class="stat-icon"><i class="ph-duotone ph-currency-inr"></i></div>
                 <div class="stat-info">
                     <h4>${currentUser.role === 'Admin' ? 'Market Avg' : 'Portfolio Avg'}</h4>
-                    <p style="font-size: 1.25rem;">${currencyFormatter.format(stats.marketAvg || 0)} <small>Total</small></p>
+                    <p style="font-size: clamp(1rem, 2vw, 1.25rem); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(stats.marketAvg || 0)} <br><small style="font-size: 0.8rem;">Total</small></p>
                 </div>
             </div>
             <div class="stat-card">
@@ -41,18 +41,34 @@ export function renderDashboard(ctx) {
                     <p>${stats.pendingCount}</p>
                 </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-icon" style="background: var(--success-light); color: var(--success);"><i class="ph-duotone ph-check-circle"></i></div>
+            <div class="stat-card" style="background: var(--primary-light); border: 1px solid var(--primary); cursor: pointer;" onclick="window.openWalletModal()">
+                <div class="stat-icon" style="background: white; color: var(--primary);"><i class="ph-duotone ph-wallet"></i></div>
                 <div class="stat-info">
-                    <h4>Available</h4>
-                    <p>${stats.availableCount}</p>
+                    <h4>Wallet Balance</h4>
+                    <p style="font-size: clamp(1rem, 2vw, 1.25rem); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(EstatoStorage.getWalletBalance())}</p>
                 </div>
             </div>
+            ${(currentUser.role === 'Admin' || currentUser.role === 'Seller') ? `
+            <div class="stat-card" style="background: #fef2f2; border: 1px solid #fee2e2;">
+                <div class="stat-icon" style="background: white; color: #dc2626;"><i class="ph-duotone ph-gavel"></i></div>
+                <div class="stat-info">
+                    <h4>Active Auctions</h4>
+                    <p style="font-size: 1.25rem;">${stats.activeAuctions || 0}</p>
+                </div>
+            </div>
+            <div class="stat-card" style="background: #f0fdf4; border: 1px solid #dcfce7;">
+                <div class="stat-icon" style="background: white; color: #16a34a;"><i class="ph-duotone ph-chart-line-up"></i></div>
+                <div class="stat-info">
+                    <h4>Total Bids</h4>
+                    <p style="font-size: 1.25rem;">${stats.totalBids || 0}</p>
+                </div>
+            </div>
+            ` : ''}
         </div>
 
         <div class="dashboard-valuation">
             <h4>Total Portfolio Valuation</h4>
-            <p>${currencyFormatter.format(stats.totalValuation)}</p>
+            <p style="font-size: clamp(1.2rem, 3vw, 2.5rem); font-weight: 800; color: var(--primary); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(stats.totalValuation)}</p>
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 3rem;">
@@ -97,6 +113,69 @@ export function renderDashboard(ctx) {
                 return `
                     <div class="admin-queue-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
                         ${slice.map(p => generatePropertyCard(p)).join('')}
+                    </div>
+                `;
+            })()}
+        </div>
+
+        ${(currentUser.role === 'Seller' || currentUser.role === 'Admin') ? `
+        <!-- NEW: My Properties in Auction (For Sellers) -->
+        <div class="user-auctions-section" style="margin-bottom: 3rem; animation: fadeIn 0.4s ease-out;">
+            <div class="section-header" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-color); padding-top: 2rem;">
+                <div>
+                    <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem; color: #f97316;">
+                        <i class="ph ph-gavel"></i> My Properties in Auction
+                    </h3>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Monitor and manage your active auction listings.</p>
+                </div>
+            </div>
+
+            ${(() => {
+                const myAuctions = EstatoStorage.getProperties().filter(p => p.ownerId === currentUser.id && p.bidding?.enabled);
+                if (myAuctions.length === 0) {
+                    return `
+                        <div class="empty-state surface-panel" style="padding: 2rem; text-align: center; background: var(--bg-hover); border-radius: var(--radius-md);">
+                            <p style="color: var(--text-muted); margin: 0;">You don't have any properties currently in auction.</p>
+                        </div>
+                    `;
+                }
+                
+                return `
+                    <div class="admin-queue-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+                        ${myAuctions.map(p => generatePropertyCard(p)).join('')}
+                    </div>
+                `;
+            })()}
+        </div>
+        ` : ''}
+
+        <!-- NEW: My Active Bids Section (For Buyers) -->
+        <div class="active-bids-section" style="margin-bottom: 3rem; animation: fadeIn 0.4s ease-out;">
+            <div class="section-header" style="margin-bottom: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 2rem;">
+                <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem; color: #ef4444;">
+                    <i class="ph ph-gavel"></i> My Active Auction Bids
+                </h3>
+                <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Auctions you are currently participating in.</p>
+            </div>
+
+            ${(() => {
+                const properties = EstatoStorage.getProperties();
+                const myBids = properties.filter(p => {
+                    const participants = p.bidding?.participants || {};
+                    return !!participants[currentUser.id];
+                });
+
+                if (myBids.length === 0) {
+                    return `
+                        <div class="empty-state surface-panel" style="padding: 2rem; text-align: center; background: var(--bg-hover); border-radius: var(--radius-md);">
+                            <p style="color: var(--text-muted); margin: 0;">You haven't joined any auctions yet.</p>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+                        ${myBids.map(p => generatePropertyCard(p)).join('')}
                     </div>
                 `;
             })()}
