@@ -146,7 +146,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                 </div>
                 ${ratingHTML}
                 ${prop.bidding && prop.bidding.enabled && prop.status !== 'Sold' && prop.status !== 'PaymentPending' ? `
-                    <div class="auction-timer" data-id="${prop.id}" data-end="${prop.bidding.endTime}" style="position: absolute; bottom: 0.75rem; left: 0.75rem; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); color: white; padding: 0.4rem 0.75rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; z-index: 5;">
+                    <div class="auction-timer" data-id="${prop.id}" data-end="${prop.bidding.endTime}" data-start-time="${prop.bidding.startTime}" style="position: absolute; bottom: 0.75rem; left: 0.75rem; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); color: white; padding: 0.4rem 0.75rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; z-index: 5;">
                         <i class="ph-fill ph-timer" style="color: #fbbf24;"></i>
                         <span class="timer-display">Loading...</span>
                     </div>
