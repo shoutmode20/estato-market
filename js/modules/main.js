@@ -2273,6 +2273,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (prop && prop.status !== 'Sold' && prop.status !== 'PaymentPending' && !prop.bidding.finalized) {
                     if (!_pendingFinalizations.has(propId)) {
                         _pendingFinalizations.add(propId);
+                        // Immediately patch local cache so the 1s timer loop doesn't re-trigger finalize
+                        prop.bidding.finalized = true;
                         EstatoStorage.finalizeAuction(propId).finally(() => _pendingFinalizations.delete(propId));
                     }
                 }
@@ -2284,6 +2286,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (!_pendingDefaults.has(propId)) {
                             console.log(`[Timer] Payment deadline expired for ${propId}. Triggering default.`);
                             _pendingDefaults.add(propId);
+                            // Immediately patch local status so timer doesn't re-trigger on next tick
+                            prop.status = 'Available';
                             EstatoStorage.reportWinnerDefault(propId).finally(() => _pendingDefaults.delete(propId));
                         }
                     }
