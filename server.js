@@ -198,49 +198,44 @@ app.post('/api/bidding/entry', requireAuth, async (req, res) => {
         if (admin.apps.length === 0) return res.status(500).json({ error: 'Database disconnected' });
         const db = admin.database();
 
-        const userSnap = await db.ref(`users/${userId}`).once('value');
+        const [userSnap, propSnap] = await Promise.all([
+            db.ref(`users/${userId}`).once('value'),
+            db.ref(`properties/${propertyId}`).once('value')
+        ]);
+
         const user = userSnap.val();
+        const prop = propSnap.val();
+
         if (!user) return res.status(404).json({ error: 'User not found.' });
         if (user.isBanned) return res.status(403).json({ error: 'Your account is banned due to multiple auction defaults.' });
-
-        const propSnap = await db.ref(`properties/${propertyId}`).once('value');
-        const prop = propSnap.val();
         if (!prop || !prop.bidding || !prop.bidding.enabled) {
             return res.status(400).json({ error: 'Bidding is not enabled for this property.' });
         }
         if (prop.ownerId === userId) {
             return res.status(403).json({ error: 'You cannot participate in an auction for your own property.' });
         }
-
-        const fee = Number(prop.bidding.entryFee || 0);
         if (prop.bidding.participants && prop.bidding.participants[userId]) {
             return res.json({ success: true, message: 'Already joined.' });
         }
 
+        const fee = Number(prop.bidding.entryFee || 0);
         if ((user.balance || 0) < fee) {
             return res.status(400).json({ error: `Insufficient balance. Entry fee is ₹${fee.toLocaleString()}.` });
         }
 
-        // Atomic Transaction for Entry Fee
-        const result = await db.ref('/').transaction((root) => {
-            if (!root) return undefined;
-            if (!root.users || !root.users[userId] || root.users[userId].balance < fee) return undefined;
-            
-            root.users[userId].balance -= fee;
-            
-            if (!root.properties[propertyId].bidding.participants) {
-                root.properties[propertyId].bidding.participants = {};
-            }
-            root.properties[propertyId].bidding.participants[userId] = {
-                joinedAt: new Date().toISOString(),
-                userName: req.user.name || user.name || 'Estato User',
-                paidFee: fee
-            };
-            return root;
-        });
+        // Step 1: Atomically add participant to property
+        const participantData = {
+            joinedAt: new Date().toISOString(),
+            userName: req.user.name || user.name || 'Estato User',
+            paidFee: fee
+        };
+        await db.ref(`properties/${propertyId}/bidding/participants/${userId}`).set(participantData);
 
-        if (!result.committed) {
-            return res.status(500).json({ error: 'Failed to join auction. Please try again.' });
+        // Step 2: Atomically deduct entry fee from user balance
+        if (fee > 0) {
+            await db.ref(`users/${userId}/balance`).set(
+                admin.database.ServerValue.increment(-fee)
+            );
         }
 
         res.json({ success: true });
@@ -263,58 +258,75 @@ app.post('/api/bidding/place', requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'Bid amount must be a positive multiple of ₹10,000.' });
         }
 
-        const result = await db.ref('/').transaction((root) => {
-            if (!root) return undefined;
-            const prop = root.properties ? root.properties[propertyId] : null;
-            if (!prop || !prop.bidding || !prop.bidding.enabled || prop.ownerId === userId) return undefined;
+        // Pre-validate using fresh reads
+        const [userSnap, propSnap] = await Promise.all([
+            db.ref(`users/${userId}`).once('value'),
+            db.ref(`properties/${propertyId}`).once('value')
+        ]);
+        const userData = userSnap.val();
+        const propData = propSnap.val();
 
-            const bidData = prop.bidding;
-            const participants = bidData.participants || {};
-            if (!participants[userId]) return undefined;
+        if (!userData || userData.isBanned) return res.status(403).json({ error: 'Access denied.' });
+        if (!propData || !propData.bidding || !propData.bidding.enabled || propData.ownerId === userId) {
+            return res.status(400).json({ error: 'Invalid auction.' });
+        }
+        if (!propData.bidding.participants || !propData.bidding.participants[userId]) {
+            return res.status(400).json({ error: 'You must join the auction first.' });
+        }
+        const nowTs = Date.now();
+        const startTs = new Date(propData.bidding.startTime).getTime();
+        const endTs = new Date(propData.bidding.endTime).getTime();
+        if (nowTs < startTs) return res.status(400).json({ error: 'Auction has not started yet.' });
+        if (nowTs >= endTs) return res.status(400).json({ error: 'Auction has already ended.' });
 
-            const nowTs = Date.now();
-            const startTs = new Date(bidData.startTime).getTime();
-            const endTs = new Date(bidData.endTime).getTime();
-            if (nowTs < startTs || nowTs >= endTs) return undefined;
+        const currentHighest = Number(propData.highestBid || propData.bidding.basePrice || 0);
+        const minIncrement = Number(propData.bidding.minIncrement || 10000);
+        if (bidAmount < currentHighest + minIncrement) {
+            return res.status(400).json({ error: `Minimum bid is ₹${(currentHighest + minIncrement).toLocaleString('en-IN')}.` });
+        }
+        if ((userData.balance || 0) < bidAmount) {
+            return res.status(400).json({ error: 'Insufficient wallet balance to place this bid.' });
+        }
 
-            const currentHighest = Number(prop.highestBid || bidData.basePrice || 0);
-            const minIncrement = Number(bidData.minIncrement || 10000);
-            if (bidAmount < currentHighest + minIncrement) return undefined;
+        const prevHighBidderId = propData.highestBidderId;
+        const prevHighestAmount = currentHighest;
+        const bidderName = req.user.name || userData.name || 'Estato User';
+        const nowIso = new Date(nowTs).toISOString();
 
-            const currentUserData = root.users[userId];
-            if (!currentUserData || currentUserData.balance < bidAmount || currentUserData.isBanned) return undefined;
+        // Step 1: Targeted transaction on the property only
+        const pRef = db.ref(`properties/${propertyId}`);
+        const result = await pRef.transaction((p) => {
+            if (!p) return p;
+            if (!p.bidding || !p.bidding.enabled || p.ownerId === userId) return undefined;
+            const pEndTs = new Date(p.bidding.endTime).getTime();
+            if (nowTs >= pEndTs) return undefined;
+            const pHighest = Number(p.highestBid || p.bidding.basePrice || 0);
+            if (bidAmount < pHighest + Number(p.bidding.minIncrement || 10000)) return undefined;
 
-            currentUserData.balance -= bidAmount;
+            p.highestBid = bidAmount;
+            p.highestBidderId = userId;
+            p.highestBidderName = bidderName;
+            if (!p.bids) p.bids = {};
+            p.bids['bid_' + nowTs] = { userId, userName: bidderName, amount: bidAmount, timestamp: nowIso };
 
-            let prevHighBidderId = prop.highestBidderId;
-            let prevHighestAmount = currentHighest;
-            if (prevHighBidderId && prevHighBidderId !== userId && root.users[prevHighBidderId]) {
-                root.users[prevHighBidderId].balance += prevHighestAmount;
-            }
-
-            prop.highestBid = bidAmount;
-            prop.highestBidderId = userId;
-            prop.highestBidderName = req.user.name || currentUserData.name || 'Estato User';
-            
-            if (!prop.bids) prop.bids = {};
-            prop.bids['bid_' + nowTs] = {
-                userId: userId,
-                userName: prop.highestBidderName,
-                amount: bidAmount,
-                timestamp: new Date(nowTs).toISOString()
-            };
-
-            const remainingSecs = (endTs - nowTs) / 1000;
+            const remainingSecs = (pEndTs - nowTs) / 1000;
             if (remainingSecs > 0 && remainingSecs < 30) {
-                prop.bidding.endTime = new Date(endTs + 60000).toISOString();
+                p.bidding.endTime = new Date(pEndTs + 60000).toISOString();
             }
-
-            return root;
+            return p;
         });
 
         if (!result.committed) {
-            return res.status(400).json({ error: 'Bid rejected: Auction ended, you were outbid, or insufficient funds.' });
+            return res.status(400).json({ error: 'Bid rejected: You were outbid or auction ended.' });
         }
+
+        // Step 2: Atomic wallet updates (deduct new bidder, refund previous)
+        const walletUpdates = {};
+        walletUpdates[`users/${userId}/balance`] = admin.database.ServerValue.increment(-bidAmount);
+        if (prevHighBidderId && prevHighBidderId !== userId && prevHighestAmount > 0) {
+            walletUpdates[`users/${prevHighBidderId}/balance`] = admin.database.ServerValue.increment(prevHighestAmount);
+        }
+        await db.ref('/').update(walletUpdates);
 
         res.json({ success: true });
     } catch (err) {
