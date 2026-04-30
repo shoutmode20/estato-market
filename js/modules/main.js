@@ -11,6 +11,7 @@ import {
 } from './ui/property-card.js';
 import { renderDashboard as externalRenderDashboard } from './ui/dashboard.js';
 import { renderMessages as externalRenderMessages } from './ui/messaging.js';
+import { renderAuctions as externalRenderAuctions } from './ui/auctions.js';
 import { initForms } from './ui/forms.js';
 
 /* Estato V12.1 - Production - SEO & Pagination Enabled */
@@ -1508,6 +1509,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'messages': renderMessages(); break;
             case 'properties': renderProperties(currentFilterCity, searchQuery); break;
             case 'watchlist': renderSavedProperties(); break;
+            case 'auctions': renderAuctions(); break;
             case 'profile': renderProfile(); break;
             case 'audit-logs': renderAuditLogs(); break;
             default: renderProperties();
@@ -1604,6 +1606,12 @@ document.addEventListener('DOMContentLoaded', () => {
             currentUser, EstatoStorage, viewContainer, dashboardCharts, currencyFormatter,
             generatePropertyCard, Chart: window.Chart, attachCardListeners,
             seedDummyData: window.seedDummyData, exportBackup, handleRestore, renderAdminActivityFeed
+        });
+    }
+    function renderAuctions() {
+        const viewContainer = document.getElementById('viewContainer');
+        externalRenderAuctions({
+            currentUser, EstatoStorage, viewContainer, attachCardListeners
         });
     }
     function renderCities() {
