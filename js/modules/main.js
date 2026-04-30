@@ -807,8 +807,9 @@ document.addEventListener('DOMContentLoaded', () => {
             debouncedSearch(e.target.value.trim().toLowerCase());
         });
 
-        if(openAddModalBtn) openAddModalBtn.addEventListener('click', () => openModal());
-        if(closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
+        if(openAddModalBtn) openAddModalBtn.addEventListener('click', () => window.openModal());
+        if(mobileAddBtn) mobileAddBtn.addEventListener('click', () => window.openModal());
+        if(closeModalBtn) closeModalBtn.addEventListener('click', window.closeModal);
         if(cancelModalBtn) cancelModalBtn.addEventListener('click', () => {
             propertyForm.reset();
             propImageFile.value = '';
