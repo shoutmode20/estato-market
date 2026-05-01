@@ -625,23 +625,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     // 2. Component-specific targeted syncs
                     syncActiveBidModal();
 
-                    // 3. View-specific re-renders
-                    if (!_compareRestored && EstatoStorage.getProperties().length > 0) {
-                        _compareRestored = true;
-                        const savedIds = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]');
-                        const restored = savedIds
-                            .map(id => EstatoStorage.getPropertyById(id))
-                            .filter(Boolean);
-                        if (restored.length > 0) {
-                            compareList = restored;
-                            updateCompareTray();
+                    // 3. View-specific re-renders — skip if any modal is currently open
+                    // to prevent the property grid from rebuilding behind the open modal
+                    const anyModalOpen = document.querySelector('.modal-overlay.active');
+                    if (!anyModalOpen) {
+                        if (!_compareRestored && EstatoStorage.getProperties().length > 0) {
+                            _compareRestored = true;
+                            const savedIds = JSON.parse(localStorage.getItem('estato_compare_v1') || '[]');
+                            const restored = savedIds
+                                .map(id => EstatoStorage.getPropertyById(id))
+                                .filter(Boolean);
+                            if (restored.length > 0) {
+                                compareList = restored;
+                                updateCompareTray();
+                            }
                         }
+                        
+                        renderView(currentView, searchInput ? searchInput.value : '');
+                        renderNotifications();
+                        updateSidebarBadges();
+                        updateSeoMetadata();
+                    } else {
+                        // Modal is open: only sync badges and notifications, don't rebuild grid
+                        renderNotifications();
+                        updateSidebarBadges();
                     }
-                    
-                    renderView(currentView, searchInput ? searchInput.value : '');
-                    renderNotifications();
-                    updateSidebarBadges();
-                    updateSeoMetadata();
                     
                     // History API Routing: Open property if URL path is /property/:id
                     if (window.location.pathname.startsWith('/property/')) {

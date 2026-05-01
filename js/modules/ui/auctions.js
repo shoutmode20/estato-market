@@ -13,17 +13,29 @@ export function renderAuctions(ctx) {
     const allProps = EstatoStorage.getProperties();
     let relevantProps = [];
 
+    const isAuctionProperty = (p) => {
+        // An auction property is one with bidding explicitly enabled,
+        // or one that went through an auction (has bids, winner, or is Sold/PaymentPending with auction data)
+        return (
+            (p.bidding && p.bidding.enabled) ||
+            p.winnerId ||
+            (p.bids && Object.keys(p.bids).length > 0) ||
+            (p.bidding && p.bidding.finalized)
+        );
+    };
+
     if (currentUser.role === 'Buyer') {
         relevantProps = allProps.filter(p => {
-            if (!p.bidding || !p.bidding.enabled) return false;
-            const joined = p.bidding.participants && p.bidding.participants[currentUser.id];
+            if (!isAuctionProperty(p)) return false;
+            const joined = p.bidding && p.bidding.participants && p.bidding.participants[currentUser.id];
             const won = p.winnerId === currentUser.id;
-            return joined || won;
+            const bidPlaced = p.bids && Object.values(p.bids).some(b => b.userId === currentUser.id);
+            return joined || won || bidPlaced;
         });
     } else if (currentUser.role === 'Seller') {
-        relevantProps = allProps.filter(p => p.ownerId === currentUser.id && p.bidding && p.bidding.enabled);
+        relevantProps = allProps.filter(p => p.ownerId === currentUser.id && isAuctionProperty(p));
     } else {
-        relevantProps = allProps.filter(p => p.bidding && p.bidding.enabled);
+        relevantProps = allProps.filter(p => isAuctionProperty(p));
     }
 
     if (relevantProps.length === 0) {

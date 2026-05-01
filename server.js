@@ -79,6 +79,24 @@ async function requireAuth(req, res, next) {
 // REST API Routes
 // ---------------------------------------------------------
 
+// Helper: Write a structured audit entry to Firebase
+async function writeAuditLog(req, action, details, metadata = {}) {
+    if (admin.apps.length === 0) return;
+    const entry = {
+        timestamp: new Date().toISOString(),
+        userId: req.user.uid,
+        userEmail: req.user.email || 'unknown',
+        action,
+        details,
+        metadata
+    };
+    try {
+        await admin.database().ref('audit_logs').push(entry);
+    } catch (e) {
+        console.warn('[Audit] Failed to write audit log:', e.message);
+    }
+}
+
 // Health / Status Check Endpoint (public)
 app.get('/api/status', (req, res) => {
     res.json({
@@ -238,6 +256,7 @@ app.post('/api/bidding/entry', requireAuth, async (req, res) => {
             );
         }
 
+        writeAuditLog(req, 'AUCTION_ENTRY_FEE_PAID', `User joined auction for property ${propertyId}`, { propertyId, fee });
         res.json({ success: true });
     } catch (err) {
         console.error('[API /bidding/entry]', err);
@@ -328,6 +347,7 @@ app.post('/api/bidding/place', requireAuth, async (req, res) => {
         }
         await db.ref('/').update(walletUpdates);
 
+        writeAuditLog(req, 'BID_PLACED', `User placed bid of ₹${bidAmount.toLocaleString('en-IN')} on property ${propertyId}`, { propertyId, bidAmount, prevHighBidderId, prevHighestAmount });
         res.json({ success: true });
     } catch (err) {
         console.error('[API /bidding/place]', err);
@@ -382,6 +402,7 @@ app.post('/api/bidding/finalize', requireAuth, async (req, res) => {
             await db.ref('/').update(updates);
         }
 
+        writeAuditLog(req, 'AUCTION_FINALIZED', `Auction finalized for property ${propertyId}. Winner: ${p.winnerId || 'None'}`, { propertyId, winnerId: p.winnerId, finalPrice: p.highestBid });
         res.json({ success: true });
     } catch (err) {
         console.error('[API finalize]', err);
