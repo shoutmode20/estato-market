@@ -1066,7 +1066,8 @@ body {
 
 /* Second-tier modals that must appear above property details modal */
 #bidModal,
-#walletModal {
+#walletModal,
+#bidHistoryModal {
     z-index: 20000;
 }
 
