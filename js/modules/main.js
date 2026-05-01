@@ -1525,6 +1525,91 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- Admin Audit Logs View ---
+    async function renderAuditLogs() {
+        if (!currentUser || currentUser.role !== 'Admin') {
+            showToast("Access Denied", "error");
+            renderProperties();
+            return;
+        }
+
+        viewContainer.innerHTML = `
+            <div class="section-header" style="margin-bottom: 2rem;">
+                <h2>System Audit Logs</h2>
+                <p>Track all critical system and bidding events.</p>
+            </div>
+            <div style="text-align: center; padding: 3rem; color: var(--text-light);">
+                <i class="fa-solid fa-spinner fa-spin" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                <p>Loading audit logs...</p>
+            </div>
+        `;
+
+        try {
+            const token = await EstatoStorage.getAuthToken();
+            const res = await fetch('/api/audit', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+
+            if (!res.ok) throw new Error(data.error || 'Failed to fetch');
+
+            if (data.length === 0) {
+                viewContainer.innerHTML = `
+                    <div class="section-header" style="margin-bottom: 2rem;">
+                        <h2>System Audit Logs</h2>
+                        <p>Track all critical system and bidding events.</p>
+                    </div>
+                    <div class="empty-state">
+                        <i class="fa-solid fa-clipboard-list"></i>
+                        <h3>No Audit Logs Found</h3>
+                        <p>There are no recorded events yet.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let logsHtml = data.map(log => {
+                const date = new Date(log.timestamp).toLocaleString();
+                return `
+                    <div style="background: var(--bg-surface); padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 1rem; border: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-weight: 600; color: var(--primary-color); font-size: 1.1rem;">${log.action}</span>
+                            <span style="font-size: 0.85rem; color: var(--text-light);"><i class="fa-regular fa-clock"></i> ${date}</span>
+                        </div>
+                        <p style="color: var(--text-main); font-size: 0.95rem;">${log.details}</p>
+                        <div style="font-size: 0.85rem; color: var(--text-light); background: var(--bg-main); padding: 0.75rem; border-radius: var(--radius-sm); font-family: monospace;">
+                            <strong>User:</strong> ${log.userEmail} (${log.userId})<br>
+                            ${log.metadata ? `<strong>Metadata:</strong> ${JSON.stringify(log.metadata)}` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            viewContainer.innerHTML = `
+                <div class="section-header" style="margin-bottom: 2rem;">
+                    <h2>System Audit Logs</h2>
+                    <p>Track all critical system and bidding events.</p>
+                </div>
+                <div class="audit-logs-container">
+                    ${logsHtml}
+                </div>
+            `;
+        } catch (err) {
+            console.error("[Audit Logs]", err);
+            viewContainer.innerHTML = `
+                <div class="section-header" style="margin-bottom: 2rem;">
+                    <h2>System Audit Logs</h2>
+                </div>
+                <div class="empty-state">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: #ef4444;"></i>
+                    <h3>Error Loading Logs</h3>
+                    <p>${err.message}</p>
+                </div>
+            `;
+        }
+    }
+
+
     // --- Developer Tools: Property Generator ---
     function generateDummyProperty() {
         const rand = (arr) => arr[Math.floor(Math.random() * arr.length)];
