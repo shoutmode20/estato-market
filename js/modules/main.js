@@ -1545,7 +1545,12 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         try {
-            const token = await EstatoStorage.getAuthToken();
+            let token = 'mock-token-' + currentUser.id;
+            if (window.firebase && firebase.auth().currentUser) {
+                try {
+                    token = await firebase.auth().currentUser.getIdToken();
+                } catch(e) {}
+            }
             const res = await fetch('/api/audit', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
