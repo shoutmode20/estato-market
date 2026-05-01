@@ -1064,6 +1064,12 @@ body {
     transition: var(--transition);
 }
 
+/* Second-tier modals that must appear above property details modal */
+#bidModal,
+#walletModal {
+    z-index: 20000;
+}
+
 .modal-overlay.active {
     opacity: 1;
     pointer-events: all;

@@ -19,16 +19,20 @@ const ALLOWED_ORIGINS = [
 // Middleware
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, Postman) or from allowed list
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error(`CORS: Origin '${origin}' not allowed.`));
-        }
+        // Allow requests with no origin (mobile apps, curl, Postman, same-origin)
+        if (!origin) return callback(null, true);
+        // Allow explicitly listed origins
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        // Allow all Vercel deployment URLs automatically (preview + production)
+        if (origin.endsWith('.vercel.app')) return callback(null, true);
+        // Allow Firebase hosting domains
+        if (origin.endsWith('.web.app') || origin.endsWith('.firebaseapp.com')) return callback(null, true);
+        callback(new Error(`CORS: Origin '${origin}' not allowed.`));
     },
     credentials: true
 }));
 app.use(express.json());
+
 
 // Initialize Firebase Admin
 try {
@@ -510,8 +514,17 @@ app.use(express.static(path.join(__dirname, '.'), { index: false }));
 app.get('/property/:id', async (req, res) => {
     const propId = req.params.id;
     const indexPath = path.join(__dirname, 'index.html');
-    
+
+    // Guard: Firebase property IDs never contain dots — skip SSR for static file requests
+    // e.g. /property/manifest.json, /property/sw.js should serve files, not Firebase lookups
+    if (propId.includes('.') || propId.includes('#') || propId.includes('[')) {
+        return res.sendFile(path.join(__dirname, propId), err => {
+            if (err) res.sendFile(indexPath);
+        });
+    }
+
     try {
+
         let html = fs.readFileSync(indexPath, 'utf8');
         
         if (admin.apps.length > 0) {
