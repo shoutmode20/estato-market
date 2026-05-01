@@ -268,6 +268,41 @@ app.post('/api/bidding/entry', requireAuth, async (req, res) => {
     }
 });
 
+app.post('/api/broker/claim', requireAuth, async (req, res) => {
+    try {
+        const { propertyId } = req.body;
+        const userId = req.user.uid;
+        
+        const db = admin.database();
+        const userSnap = await db.ref(`users/${userId}`).once('value');
+        const user = userSnap.val();
+
+        if (!user || user.role !== 'Broker') {
+            return res.status(403).json({ error: 'Only Brokers can claim listings.' });
+        }
+
+        const propRef = db.ref(`properties/${propertyId}`);
+        const result = await propRef.transaction((p) => {
+            if (!p) return p;
+            if (!p.needsBroker || p.assignedBrokerId) return undefined; // Already claimed or not for hire
+
+            p.assignedBrokerId = userId;
+            p.needsBroker = false;
+            return p;
+        });
+
+        if (!result.committed) {
+            return res.status(400).json({ error: 'Claim failed: Listing may have already been claimed or no longer needs a broker.' });
+        }
+
+        writeAuditLog(req, 'BROKER_CLAIMED_LISTING', `Broker ${userId} claimed listing ${propertyId}`, { propertyId });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[API /broker/claim]', err);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
 app.post('/api/bidding/place', requireAuth, async (req, res) => {
     try {
         const { propertyId, amount } = req.body;
@@ -660,7 +695,15 @@ setInterval(async () => {
                     const finalPrice = Number(p.highestBid || p.bidding.basePrice || 0);
 
                     if (winnerId) {
-                        if (p.ownerId) updates[`users/${p.ownerId}/balance`] = admin.database.ServerValue.increment(finalPrice);
+                        if (p.ownerId) {
+                            const commission = p.assignedBrokerId ? Math.floor(finalPrice * 0.02) : 0;
+                            const sellerPayout = finalPrice - commission;
+                            
+                            updates[`users/${p.ownerId}/balance`] = admin.database.ServerValue.increment(sellerPayout);
+                            if (commission > 0 && p.assignedBrokerId) {
+                                updates[`users/${p.assignedBrokerId}/balance`] = admin.database.ServerValue.increment(commission);
+                            }
+                        }
                         updates[`users/${winnerId}/reputation`] = admin.database.ServerValue.increment(0.1);
                     }
 

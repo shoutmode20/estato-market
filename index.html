@@ -63,6 +63,11 @@
                         <span>Seller</span>
                         <small>List & Sell</small>
                     </div>
+                    <div class="role-card" data-role="Broker">
+                        <i class="ph ph-briefcase"></i>
+                        <span>Broker</span>
+                        <small>Manage Portfolios</small>
+                    </div>
                     <div class="role-card" data-role="Admin">
                         <i class="ph ph-shield-check"></i>
                         <span>Admin</span>
@@ -240,6 +245,7 @@
                         <div class="form-group half">
                             <label>Property Category</label>
                             <select id="propCategory" required></select>
+                            <input type="text" id="propCategoryCustom" placeholder="Describe category (e.g. Farmhouse)" style="display: none; margin-top: 0.5rem;" maxlength="50">
                         </div>
                         <div class="form-group half">
                             <label>Property Type</label>
@@ -635,6 +641,40 @@
                         <!-- Timeline entries injected here -->
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Broker Verification Modal -->
+    <div class="modal-overlay" id="brokerVerificationModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Broker Verification</h3>
+                <button class="close-btn" onclick="document.getElementById('brokerVerificationModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="brokerVerificationForm">
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem;">
+                        To receive your "Verified Broker" badge, please provide your official government-issued license details. Our admin team will review your application within 24-48 hours.
+                    </p>
+                    <div class="form-group">
+                        <label>RERA Number / License ID</label>
+                        <input type="text" id="brokerLicense" required placeholder="e.g. PRM/KA/RERA/1251/..." maxlength="50">
+                    </div>
+                    <div class="form-group">
+                        <label>Official Agency Name</label>
+                        <input type="text" id="brokerAgency" required placeholder="e.g. Elite Realty Group" maxlength="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Years of Experience</label>
+                        <input type="number" id="brokerExperience" required placeholder="5" min="0" max="60">
+                    </div>
+                    <div class="modal-footer" style="padding: 1.5rem 0 0 0; border: none;">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1rem;">
+                            Submit Verification <i class="ph ph-shield-check"></i>
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

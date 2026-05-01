@@ -38,7 +38,33 @@ export function initForms(ctx) {
         };
 
         populateSelect('propType', FILTER_CONFIG.types, property ? property.type : 'Sale');
-        populateSelect('propCategory', FILTER_CONFIG.categories, property ? property.category : 'Apartment');
+        
+        let initialCategory = property ? property.category : 'Apartment';
+        let isCustomCategory = property && !FILTER_CONFIG.categories.includes(initialCategory);
+        populateSelect('propCategory', FILTER_CONFIG.categories, isCustomCategory ? 'Other' : initialCategory);
+        
+        const propCategoryCustom = document.getElementById('propCategoryCustom');
+        if (isCustomCategory) {
+            propCategoryCustom.style.display = 'block';
+            propCategoryCustom.value = initialCategory;
+        } else {
+            propCategoryCustom.style.display = 'none';
+            propCategoryCustom.value = '';
+        }
+
+        const propCategoryEl = document.getElementById('propCategory');
+        const propBhkEl = document.getElementById('propBhk');
+        
+        propCategoryEl.onchange = (e) => {
+            const val = e.target.value;
+            propCategoryCustom.style.display = (val === 'Other') ? 'block' : 'none';
+            if (val === 'Other') propCategoryCustom.focus();
+            
+            if (val === 'Plot' || val === 'Commercial') {
+                propBhkEl.value = 'N/A';
+            }
+        };
+
         populateSelect('propStatus', FILTER_CONFIG.statuses, property ? property.status : 'Pending');
         populateSelect('propBhk', FILTER_CONFIG.bhkLayouts, property ? property.bhk : '2 BHK');
 
@@ -148,7 +174,9 @@ export function initForms(ctx) {
             status: (currentUser && currentUser.role === 'Admin')
                 ? document.getElementById('propStatus').value
                 : (id && existingProp ? existingProp.status : 'Pending'),
-            category: document.getElementById('propCategory').value,
+            category: document.getElementById('propCategory').value === 'Other' 
+                ? (document.getElementById('propCategoryCustom').value.trim() || 'Other') 
+                : document.getElementById('propCategory').value,
             images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
         };
 

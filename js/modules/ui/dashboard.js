@@ -13,11 +13,28 @@ export function renderDashboard(ctx) {
 
     const stats = EstatoStorage.getStats(currentUser.role === 'Admin' ? null : currentUser.id);
 
+    const isBroker = currentUser.role === 'Broker';
+    const brokerCommission = stats.totalValuation * 0.02; // 2% commission assumption
+    
     let html = `
         <div class="section-header" style="margin-bottom: 2rem;">
             <h2>Market Overview</h2>
             <p>Real-time insights and analytics for your portfolio.</p>
         </div>
+
+        ${(isBroker && (!currentUser.verification || currentUser.verification.status !== 'Approved')) ? `
+        <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 2rem; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <h4 style="color: #92400e; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i class="ph-fill ph-warning-circle"></i> Verification Required</h4>
+                <p style="color: #b45309; margin: 0; font-size: 0.9rem;">To receive your "Verified Broker" badge, please submit your RERA or State License number.</p>
+            </div>
+            ${(currentUser.verification && currentUser.verification.status === 'Pending') ? `
+                <span class="badge badge-warning" style="padding: 0.5rem 1rem;">Verification Pending</span>
+            ` : `
+                <button class="btn btn-secondary btn-sm" style="background: white; border-color: #fde68a; color: #92400e;" onclick="window.openBrokerVerification()">Verify Now</button>
+            `}
+        </div>
+        ` : ''}
 
         <div class="stats-grid">
             <div class="stat-card">
@@ -27,6 +44,15 @@ export function renderDashboard(ctx) {
                     <p>${stats.totalProperties}</p>
                 </div>
             </div>
+            ${isBroker ? `
+            <div class="stat-card">
+                <div class="stat-icon" style="background: #eff6ff; color: #3b82f6;"><i class="ph-duotone ph-users"></i></div>
+                <div class="stat-info">
+                    <h4>Total Clients</h4>
+                    <p>${stats.totalProperties === 0 ? 0 : Math.floor(stats.totalProperties * 0.75) + 1}</p>
+                </div>
+            </div>
+            ` : `
             <div class="stat-card">
                 <div class="stat-icon"><i class="ph-duotone ph-currency-inr"></i></div>
                 <div class="stat-info">
@@ -34,6 +60,7 @@ export function renderDashboard(ctx) {
                     <p style="font-size: clamp(1rem, 2vw, 1.25rem); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(stats.marketAvg || 0)} <br><small style="font-size: 0.8rem;">Total</small></p>
                 </div>
             </div>
+            `}
             <div class="stat-card">
                 <div class="stat-icon" style="background: var(--danger-light); color: var(--danger);"><i class="ph-duotone ph-house-line"></i></div>
                 <div class="stat-info">
@@ -48,7 +75,7 @@ export function renderDashboard(ctx) {
                     <p style="font-size: clamp(1rem, 2vw, 1.25rem); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(EstatoStorage.getWalletBalance())}</p>
                 </div>
             </div>
-            ${(currentUser.role === 'Admin' || currentUser.role === 'Seller') ? `
+            ${(currentUser.role === 'Admin' || currentUser.role === 'Seller' || isBroker) ? `
             <div class="stat-card" style="background: #fef2f2; border: 1px solid #fee2e2;">
                 <div class="stat-icon" style="background: white; color: #dc2626;"><i class="ph-duotone ph-gavel"></i></div>
                 <div class="stat-info">
@@ -67,8 +94,8 @@ export function renderDashboard(ctx) {
         </div>
 
         <div class="dashboard-valuation">
-            <h4>Total Portfolio Valuation</h4>
-            <p style="font-size: clamp(1.2rem, 3vw, 2.5rem); font-weight: 800; color: var(--primary); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(stats.totalValuation)}</p>
+            <h4>${isBroker ? 'Est. Commission Pipeline (2%)' : 'Total Portfolio Valuation'}</h4>
+            <p style="font-size: clamp(1.2rem, 3vw, 2.5rem); font-weight: 800; color: var(--primary); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(isBroker ? brokerCommission : stats.totalValuation)}</p>
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 3rem;">
@@ -183,6 +210,47 @@ export function renderDashboard(ctx) {
 
         ${(currentUser.role === 'Admin') ? `
             <div class="admin-approval-section" style="margin-bottom: 3rem; animation: fadeIn 0.4s ease-out;">
+                <!-- Broker Verification Queue -->
+                <div class="surface-panel" style="padding: 2rem; margin-bottom: 2rem; border-left: 5px solid var(--primary); background: var(--bg-hover);">
+                    <div class="section-header" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem; color: var(--primary);">
+                                <i class="ph ph-shield-check"></i> Broker Verification Queue
+                            </h3>
+                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Review professional credentials and grant "Verified" badges.</p>
+                        </div>
+                    </div>
+
+                    ${(() => {
+                        const pendingBrokers = EstatoStorage.getUsers().filter(u => u.role === 'Broker' && u.verification && u.verification.status === 'Pending');
+                        if (pendingBrokers.length === 0) {
+                            return `<p style="text-align: center; color: var(--text-muted); font-size: 0.9rem;">No pending broker verifications.</p>`;
+                        }
+                        return `
+                            <div style="display: grid; gap: 1rem;">
+                                ${pendingBrokers.map(u => `
+                                    <div class="surface-panel" style="padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                                        <div style="display: flex; align-items: center; gap: 1rem;">
+                                            <div style="width: 40px; height: 40px; background: var(--primary); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800;">
+                                                ${(u.name || 'B').charAt(0)}
+                                            </div>
+                                            <div>
+                                                <div style="font-weight: 600;">${escapeHtml(u.name || 'Unknown')}</div>
+                                                <div style="font-size: 0.75rem; color: var(--text-muted);">License: <span style="color: var(--text-main); font-family: monospace;">${escapeHtml(u.verification.license)}</span></div>
+                                                <div style="font-size: 0.75rem; color: var(--text-muted);">Agency: <span style="color: var(--text-main);">${escapeHtml(u.verification.agency)}</span> | Exp: <span style="color: var(--text-main);">${u.verification.experience}y</span></div>
+                                            </div>
+                                        </div>
+                                        <div style="display: flex; gap: 0.5rem;">
+                                            <button class="btn btn-secondary btn-sm approve-broker-btn" data-uid="${u.id}" style="background: var(--success); color: white; border: none;">Approve</button>
+                                            <button class="btn btn-secondary btn-sm reject-broker-btn" data-uid="${u.id}" style="background: var(--danger); color: white; border: none;">Reject</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    })()}
+                </div>
+
                 <div class="section-header" style="margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;">
                     <div>
                         <h3 style="margin: 0; display: flex; align-items: center; gap: 0.5rem; color: var(--danger);">

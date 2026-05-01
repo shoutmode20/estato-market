@@ -273,7 +273,8 @@ document.addEventListener('DOMContentLoaded', () => {
         'Apartment': { icon: 'ph-buildings', tags: ['High-rise', 'Security', 'Amenities'], avgPriceRange: '₹50L - ₹5Cr', color: 'blue' },
         'Villa': { icon: 'ph-house-line', tags: ['Private', 'Garden', 'Spacious'], avgPriceRange: '₹3Cr - ₹20Cr', color: 'green' },
         'Plot': { icon: 'ph-map-trifold', tags: ['Land', 'Investment', 'Customizable'], avgPriceRange: '₹20L - ₹2Cr', color: 'orange' },
-        'Commercial': { icon: 'ph-storefront', tags: ['Retail', 'Office', 'High ROI'], avgPriceRange: '₹1Cr - ₹10Cr', color: 'purple' }
+        'Commercial': { icon: 'ph-storefront', tags: ['Retail', 'Office', 'High ROI'], avgPriceRange: '₹1Cr - ₹10Cr', color: 'purple' },
+        'Other': { icon: 'ph-dots-three', tags: ['Custom', 'Unique'], avgPriceRange: 'Varied', color: 'gray' }
     };
 
     // Filter Configuration
@@ -287,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
         types: ['Sale', 'Rent'],
         categories: Object.keys(PROPERTY_METADATA),
         statuses: ['Available', 'Rented', 'Sold'],
-        bhkLayouts: ['Studio', '1 BHK', '2 BHK', '3 BHK', '4+ BHK']
+        bhkLayouts: ['N/A', 'Studio', '1 BHK', '2 BHK', '3 BHK', '4+ BHK']
     };
 
     // Generator Constants for Dummy Data
@@ -382,6 +383,43 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         window.openModal = formApi.openModal;
         window.closeModal = formApi.closeModal;
+        window.openBrokerVerification = () => {
+            document.getElementById('brokerVerificationModal').classList.add('active');
+        };
+
+        const verificationForm = document.getElementById('brokerVerificationForm');
+        if (verificationForm) {
+            verificationForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const license = document.getElementById('brokerLicense').value;
+                const agency = document.getElementById('brokerAgency').value;
+                const experience = document.getElementById('brokerExperience').value;
+                
+                try {
+                    const verificationData = {
+                        license,
+                        agency,
+                        experience,
+                        status: 'Pending',
+                        submittedAt: new Date().toISOString()
+                    };
+                    
+                    await EstatoStorage._syncToCloud(`users/${currentUser.id}/verification`, verificationData, 'set');
+                    
+                    // Update local state
+                    currentUser.verification = verificationData;
+                    
+                    document.getElementById('brokerVerificationModal').classList.remove('active');
+                    showToast('Verification submitted successfully! Our team will review it.', 'success');
+                    
+                    // Refresh view
+                    if (currentView === 'dashboard') renderView('dashboard');
+                } catch (err) {
+                    showToast('Failed to submit verification.', 'danger');
+                }
+            });
+        }
+
         propertyForm.addEventListener('submit', formApi.handleFormSubmit);
         formApi.populateCitiesDatalist();
     }, 500);
@@ -592,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             applyRBACToDOM();
             
-            currentView = (currentUser.role === 'Seller' || currentUser.role === 'Admin') ? 'dashboard' : 'properties';
+            currentView = (currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? 'dashboard' : 'properties';
             setActiveNav(currentView);
             
             setupAppListeners();
@@ -700,16 +738,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 googleLoginBtnLocal.innerHTML = '<i class="ph ph-circle-notch ph-spin"></i> Authenticating...';
 
                 try {
-                    const success = await EstatoStorage.loginWithGoogle(role, false);
-
-                    if (success) {
-                        loadingOverlay.classList.remove('hidden');
-                        loginScreen.classList.add('hidden');
-                        // Hydration delay for visual feedback of Drive sync
-                        setTimeout(() => checkAuth(), 1500);
-                    } else {
-                        throw new Error('Login cancelled or failed.');
-                    }
+                    await EstatoStorage.loginWithGoogle(role, false);
+                    loadingOverlay.classList.remove('hidden');
+                    loginScreen.classList.add('hidden');
+                    // Hydration delay for visual feedback of Drive sync
+                    setTimeout(() => checkAuth(), 1500);
                 } catch (err) {
                     if (loginErrorMsg) {
                         loginErrorMsg.textContent = err.message;
@@ -733,7 +766,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (el.getAttribute('data-view') === 'messages') el.style.display = 'flex'; // Buyers always see messages
                 else el.style.display = 'none';
             });
-        } else if (role === 'Seller') {
+        } else if (role === 'Seller' || role === 'Broker') {
             adminElements.forEach(el => {
                 if (el.getAttribute('data-view') === 'audit-logs') el.style.display = 'none';
                 else el.style.display = 'flex';
@@ -746,7 +779,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateSidebarBadges() {
         if (!currentUser) return;
-        const count = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Admin') ? currentUser.id : null)
+        const count = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? currentUser.id : null)
             .filter(inq => inq.status === 'Unread')
             .length;
 
@@ -1777,7 +1810,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // RBAC Filtering (Fraud Prevention Sandbox)
         if (currentUser.role === 'Buyer') {
             properties = properties.filter(p => p.status !== 'Pending');
-        } else if (currentUser.role === 'Seller') {
+        } else if (currentUser.role === 'Seller' || currentUser.role === 'Broker') {
             properties = properties.filter(p => p.status !== 'Pending' || p.ownerId === currentUser.id);
         }
         // Admin sees all, including all Pending listings
@@ -1793,7 +1826,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        if (currentTypeFilter) properties = properties.filter(p => p.type === currentTypeFilter);
+        if (currentTypeFilter) {
+            if (currentTypeFilter === 'Auction') {
+                properties = properties.filter(p => p.bidding && p.bidding.enabled);
+            } else {
+                properties = properties.filter(p => p.type === currentTypeFilter);
+            }
+        }
         if (currentStatusFilter) properties = properties.filter(p => p.status === currentStatusFilter);
         if (currentCategoryFilter) properties = properties.filter(p => p.category === currentCategoryFilter);
  
@@ -1863,6 +1902,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <select id="typeSelect">
                         <option value="">Filter: All Types</option>
                         ${FILTER_CONFIG.types.map(t => `<option value="${t}" ${currentTypeFilter === t ? 'selected' : ''}>${t}</option>`).join('')}
+                        <option value="Auction" ${currentTypeFilter === 'Auction' ? 'selected' : ''}>Auctions</option>
                     </select>
                     <select id="categorySelect">
                         <option value="">Filter: All Categories</option>
@@ -2450,7 +2490,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
         
-        if (currentUser.role === 'Seller' || currentUser.role === 'Admin') {
+        if (currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') {
             html += `
                 <div class="settings-card surface-panel" style="margin-top: 2rem;">
                     <h3>Drive Data Export</h3>
@@ -2744,7 +2784,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // RBAC Filtering (Fraud Prevention Sandbox)
         if (currentUser.role === 'Buyer') {
             properties = properties.filter(p => p.status === 'Available');
-        } else if (currentUser.role === 'Seller') {
+        } else if (currentUser.role === 'Seller' || currentUser.role === 'Broker') {
             properties = properties.filter(p => p.status !== 'Pending' || p.ownerId === currentUser.id);
         }
 
@@ -2754,7 +2794,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const q = searchInput.value.toLowerCase();
             properties = properties.filter(p => p.title.toLowerCase().includes(q) || p.address.toLowerCase().includes(q));
         }
-        if (currentTypeFilter) properties = properties.filter(p => p.type === currentTypeFilter);
+        if (currentTypeFilter) {
+            if (currentTypeFilter === 'Auction') {
+                properties = properties.filter(p => p.bidding && p.bidding.enabled);
+            } else {
+                properties = properties.filter(p => p.type === currentTypeFilter);
+            }
+        }
         if (currentStatusFilter) properties = properties.filter(p => p.status === currentStatusFilter);
 
         // Apply Proximity Filter
@@ -3178,6 +3224,62 @@ document.addEventListener('DOMContentLoaded', () => {
                 showConfirm('Delete this listing? This cannot be undone.', async () => {
                     const success = await EstatoStorage.deleteProperty(id);
                     if (!success) showToast('Unauthorized: You can only delete your own listings.', 'danger');
+                });
+            });
+        });
+
+        parent.querySelectorAll('.hire-broker-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.getAttribute('data-id');
+                showConfirm('Send this listing to the Broker Lead Pool? A professional will contact you to manage this sale.', async () => {
+                    await EstatoStorage._syncToCloud(`properties/${id}/needsBroker`, true, 'set');
+                    showToast('Assistance Requested! Brokers can now view your listing.', 'success');
+                });
+            });
+        });
+
+        parent.querySelectorAll('.claim-listing-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.getAttribute('data-id');
+                showConfirm('Claim this listing? You will be assigned as the managing broker and receive a 2% commission upon successful sale.', async () => {
+                    try {
+                        const token = await firebase.auth().currentUser.getIdToken();
+                        const resp = await fetch('/api/broker/claim', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ propertyId: id })
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            showToast('Listing Claimed! It is now in your managed portfolio.', 'success');
+                        } else {
+                            showToast(data.error || 'Claim failed', 'danger');
+                        }
+                    } catch (err) {
+                        showToast('Communication error with server.', 'danger');
+                    }
+                });
+            });
+        });
+
+        parent.querySelectorAll('.approve-broker-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const uid = e.target.getAttribute('data-uid');
+                showConfirm('Approve this broker for verification?', async () => {
+                    await EstatoStorage._syncToCloud(`users/${uid}/verification/status`, 'Approved', 'set');
+                    showToast('Broker Verified Successfully!', 'success');
+                });
+            });
+        });
+
+        parent.querySelectorAll('.reject-broker-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const uid = e.target.getAttribute('data-uid');
+                showConfirm('Reject this broker verification request?', async () => {
+                    await EstatoStorage._syncToCloud(`users/${uid}/verification/status`, 'Rejected', 'set');
+                    showToast('Broker verification rejected.', 'warning');
                 });
             });
         });

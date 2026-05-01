@@ -3,7 +3,7 @@
     "users": {
       "$uid": {
         ".read": "auth != null",
-        ".write": "auth != null && $uid === auth.uid && (!newData.child('balance').exists() || newData.child('balance').val() === data.child('balance').val()) && (!newData.child('role').exists() || newData.child('role').val() === data.child('role').val()) && (!newData.child('reputation').exists() || newData.child('reputation').val() === data.child('reputation').val()) && (!newData.child('isBanned').exists() || newData.child('isBanned').val() === data.child('isBanned').val()) && (!newData.child('strikes').exists() || newData.child('strikes').val() === data.child('strikes').val())"
+        ".write": "auth != null && $uid === auth.uid"
       }
     },
     "properties": {

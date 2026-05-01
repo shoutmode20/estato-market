@@ -41,7 +41,8 @@ let _memCache = {
     notifications: [],
     activities: [],
     reviews: [],
-    recentViews: []
+    recentViews: [],
+    users: []
 };
 
 let _syncCallback = null;
@@ -112,15 +113,16 @@ function _can(action, propertyId = null) {
     const isAdmin = role === 'Admin';
     const isSeller = role === 'Seller';
     const isBuyer = role === 'Buyer';
+    const isBroker = role === 'Broker';
 
     switch (action) {
         case 'CREATE_PROPERTY':
-            return isAdmin || isSeller;
+            return isAdmin || isSeller || isBroker;
             
         case 'MODIFY_PROPERTY':
         case 'DELETE_PROPERTY':
             if (isAdmin) return true;
-            if (!isSeller || !propertyId) return false;
+            if (!(isSeller || isBroker) || !propertyId) return false;
             const prop = _memCache.properties.find(p => p.id === propertyId);
             return prop && prop.ownerId === user.id;
 
@@ -130,7 +132,7 @@ function _can(action, propertyId = null) {
             return isAdmin;
 
         case 'PLACE_BID':
-            return isAdmin || isBuyer;
+            return isAdmin || isBuyer || isBroker;
 
         default:
             return false;
@@ -356,6 +358,12 @@ export const EstatoStorage = {
                 // Welcome back — read full profile from DB
                 dbUserData = userSnap.val();
                 roleToUse = dbUserData.role || selectedRole;
+                
+                // Allow users to seamlessly switch roles from the login screen
+                if (selectedRole && selectedRole !== 'Admin' && roleToUse !== selectedRole) {
+                    roleToUse = selectedRole;
+                    await userRef.child('role').set(roleToUse);
+                }
             }
 
             // 1.1 Handle Virtual Wallet Balance (for existing users who predate wallet)
@@ -390,7 +398,7 @@ export const EstatoStorage = {
         } catch (e) {
             console.warn('[Estato Firebase] Auth Flow interrupted:', e.message);
             if (_syncCallback) _syncCallback('error');
-            return false;
+            throw e;
         }
     },
 
@@ -489,6 +497,15 @@ export const EstatoStorage = {
                 _setState({ reviews: snap.exists() ? Object.values(snap.val()) : [] });
             }, (err) => console.error("[Storage] Reviews Listener Error:", err.message));
 
+            // 7. Admin-Only Users Listener
+            if (role === 'Admin') {
+                _trackListener(db.ref('users'), (snap) => {
+                    const usersMap = snap.val() || {};
+                    const usersList = Object.entries(usersMap).map(([id, u]) => ({ id, ...u }));
+                    _setState({ users: usersList });
+                });
+            }
+
         } catch (e) {
             console.error("[Estato Firebase] Failed to initialize listeners", e);
         }
@@ -584,6 +601,7 @@ export const EstatoStorage = {
 
     // ── Properties Logic ──
     getProperties() { return _memCache.properties; },
+    getUsers() { return _memCache.users; },
 
     mergeProperties(newBatch) {
         const existing = new Map(_memCache.properties.map(p => [p.id, p]));
@@ -1256,7 +1274,7 @@ export const EstatoStorage = {
         const user = _memCache.currentUser;
         if (!user) throw new Error('Not authenticated.');
         if (user.role === 'Admin') throw new Error('Admin role cannot be changed from the app.');
-        if (newRole !== 'Buyer' && newRole !== 'Seller') throw new Error('Invalid role value.');
+        if (newRole !== 'Buyer' && newRole !== 'Seller' && newRole !== 'Broker') throw new Error('Invalid role value.');
 
         if (_syncCallback) _syncCallback('syncing');
         try {

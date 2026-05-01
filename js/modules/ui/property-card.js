@@ -209,8 +209,21 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                         </button>
                     ` : isOwner ? `
                         <button class="btn btn-secondary edit-btn shadow-hover" data-id="${escapeHtml(prop.id)}" style="flex:1;">Edit</button>
+                        ${(!prop.assignedBrokerId && !prop.needsBroker) ? `
+                            <button class="btn btn-secondary hire-broker-btn shadow-hover" data-id="${escapeHtml(prop.id)}" style="flex:1;" title="Get professional help to sell faster">
+                                <i class="ph ph-handshake"></i> Hire Broker
+                            </button>
+                        ` : prop.needsBroker ? `
+                            <div class="badge badge-warning" style="flex:1; padding: 0.5rem; text-align:center;">Broker Requested</div>
+                        ` : `
+                            <div class="badge badge-success" style="flex:1; padding: 0.5rem; text-align:center;"><i class="ph ph-user-check"></i> Managed</div>
+                        `}
                         <button class="btn btn-danger btn-icon delete-btn shadow-hover" data-id="${escapeHtml(prop.id)}" title="Delete Listing" aria-label="Delete Listing">
                             <i class="ph ph-trash"></i>
+                        </button>
+                    ` : (role === 'Broker' && prop.needsBroker && !prop.assignedBrokerId) ? `
+                        <button class="btn btn-primary claim-listing-btn shadow-hover" data-id="${escapeHtml(prop.id)}" style="flex:1; background: var(--primary);">
+                            <i class="ph ph-magnifying-glass-plus"></i> Claim Listing (2% Comm.)
                         </button>
                     ` : prop.bidding && prop.bidding.enabled ? `
                         <button class="btn btn-primary shadow-hover bid-btn" data-id="${escapeHtml(prop.id)}"
