@@ -683,11 +683,15 @@ setInterval(async () => {
     }
 }, 60000);
 
-// Start the server
-app.listen(PORT, () => {
-    console.log(`========================================`);
-    console.log(`🚀 Estato Server running on port ${PORT}`);
-    console.log(`🌐 Application: http://localhost:${PORT}`);
-    console.log(`📡 API Status : http://localhost:${PORT}/api/status`);
-    console.log(`========================================`);
-});
+// Start the server (only if run directly, not if imported by Vercel)
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`========================================`);
+        console.log(`🚀 Estato Server running on port ${PORT}`);
+        console.log(`🌐 Application: http://localhost:${PORT}`);
+        console.log(`📡 API Status : http://localhost:${PORT}/api/status`);
+        console.log(`========================================`);
+    });
+}
+
+module.exports = app;
