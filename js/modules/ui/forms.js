@@ -128,6 +128,7 @@ export function initForms(ctx) {
             return;
         }
 
+        const existingProp = id ? EstatoStorage.getPropertyById(id) : null;
         const newProperty = {
             id: id || undefined,
             title,
@@ -141,7 +142,12 @@ export function initForms(ctx) {
             area: Number(document.getElementById('propArea').value) || 0,
             address,
             type: document.getElementById('propType').value,
-            status: (currentUser && currentUser.role === 'Admin') ? document.getElementById('propStatus').value : 'Pending',
+            // For Sellers editing an approved property: preserve existing status
+            // For Sellers adding a new property: set Pending
+            // For Admins: use the dropdown selection
+            status: (currentUser && currentUser.role === 'Admin')
+                ? document.getElementById('propStatus').value
+                : (id && existingProp ? existingProp.status : 'Pending'),
             category: document.getElementById('propCategory').value,
             images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
         };
