@@ -75,7 +75,9 @@ async function requireAuth(req, res, next) {
         req.user = await admin.auth().verifyIdToken(idToken);
         next();
     } catch (err) {
-        return res.status(401).json({ error: 'Unauthorized: Invalid or expired token.' });
+        console.error(`[Auth Error] ${err.code}: ${err.message}`);
+        const msg = err.code === 'auth/id-token-expired' ? 'Unauthorized: Token expired. Please refresh the page.' : 'Unauthorized: Invalid token.';
+        return res.status(401).json({ error: msg });
     }
 }
 
@@ -86,13 +88,21 @@ async function requireAuth(req, res, next) {
 // Helper: Write a structured audit entry to Firebase
 async function writeAuditLog(req, action, details, metadata = {}) {
     if (admin.apps.length === 0) return;
+    // Sanitize metadata: Firebase push() rejects 'undefined' values
+    const sanitizedMetadata = {};
+    Object.keys(metadata).forEach(key => {
+        if (metadata[key] !== undefined) {
+            sanitizedMetadata[key] = metadata[key];
+        }
+    });
+
     const entry = {
         timestamp: new Date().toISOString(),
         userId: req.user.uid,
         userEmail: req.user.email || 'unknown',
         action,
         details,
-        metadata
+        metadata: sanitizedMetadata
     };
     try {
         await admin.database().ref('audit_logs').push(entry);

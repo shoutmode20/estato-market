@@ -1318,7 +1318,14 @@ export const EstatoStorage = {
     async payEntryFee(propertyId) {
         if (_syncCallback) _syncCallback('syncing');
         try {
-            const idToken = await (async () => { try { return await firebase.auth().currentUser.getIdToken(); } catch(e) { return 'mock-token-' + firebase.auth().currentUser.uid; } })();
+            const idToken = await (async () => { 
+                try { 
+                    // Force refresh token to prevent 'expired' errors on Vercel
+                    return await firebase.auth().currentUser.getIdToken(true); 
+                } catch(e) { 
+                    return 'mock-token-' + firebase.auth().currentUser.uid; 
+                } 
+            })();
             const res = await fetch('/api/bidding/entry', {
                 method: 'POST',
                 headers: {
@@ -1397,7 +1404,14 @@ export const EstatoStorage = {
         if (_syncCallback) _syncCallback('syncing');
 
         try {
-            const idToken = await (async () => { try { return await firebase.auth().currentUser.getIdToken(); } catch(e) { return 'mock-token-' + firebase.auth().currentUser.uid; } })();
+            const idToken = await (async () => { 
+                try { 
+                    // Force refresh token to prevent 'expired' errors on Vercel
+                    return await firebase.auth().currentUser.getIdToken(true); 
+                } catch(e) { 
+                    return 'mock-token-' + firebase.auth().currentUser.uid; 
+                } 
+            })();
             const res = await fetch('/api/bidding/place', {
                 method: 'POST',
                 headers: {
@@ -1433,7 +1447,14 @@ export const EstatoStorage = {
         if (_syncCallback) _syncCallback('syncing');
 
         try {
-            const idToken = await (async () => { try { return await firebase.auth().currentUser.getIdToken(); } catch(e) { return 'mock-token-' + firebase.auth().currentUser.uid; } })();
+            const idToken = await (async () => { 
+                try { 
+                    // Force refresh token to prevent 'expired' errors on Vercel
+                    return await firebase.auth().currentUser.getIdToken(true); 
+                } catch(e) { 
+                    return 'mock-token-' + firebase.auth().currentUser.uid; 
+                } 
+            })();
             const res = await fetch('/api/bidding/finalize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
