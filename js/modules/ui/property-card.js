@@ -140,7 +140,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                         ${prop.status === 'PaymentPending' ? '<i class="ph-fill ph-clock-countdown"></i> Payment Pending' : escapeHtml(prop.status)}
                     </span>
                     ${prop.winnerName ? `<span class="badge" style="background: var(--primary); color: white;"><i class="ph-fill ph-trophy"></i> Winner: ${escapeHtml(prop.winnerName)}</span>` : ''}
-                    ${prop.bidding && prop.bidding.enabled && prop.status !== 'Sold' && prop.status !== 'PaymentPending' ? `<span class="badge" style="background: #ef4444; color: white;"><i class="ph-fill ph-gavel"></i> Auction</span>` : ''}
+                    ${(prop.bidding && (prop.bidding.enabled || prop.bidding.finalized)) ? `<span class="badge" style="background: #ef4444; color: white;"><i class="ph-fill ph-gavel"></i> Auction</span>` : ''}
                     ${prop.bidding && prop.bidding.participants && Object.keys(prop.bidding.participants).length >= 3 ? `<span class="badge" style="background: linear-gradient(135deg, #f97316, #ef4444); color: white; box-shadow: 0 0 10px rgba(239, 68, 68, 0.4); border: none;"><i class="ph-fill ph-fire"></i> Hot Bid</span>` : ''}
                     ${distance !== null ? `<span class="badge" style="background: var(--success); color: white; border: none;"><i class="ph ph-navigation-arrow"></i> ${distance.toFixed(1)} km</span>` : ''}
                 </div>
@@ -176,7 +176,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                     ` : formatPrice(prop.price)}
                     <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">${!isSale && !(prop.bidding && prop.bidding.enabled) ? '/ mo' : ''}</span>
                 </div>
-                ${prop.bidding && prop.bidding.enabled ? `
+                ${prop.bidding && prop.bidding.enabled && prop.status !== 'Sold' && prop.status !== 'PaymentPending' ? `
                     <div class="auction-timer" style="font-size: 0.85rem; color: var(--danger); font-weight: 700; margin-top: 0.5rem; display: flex; align-items: center; gap: 0.4rem;">
                         <i class="ph-fill ph-clock"></i>
                         <span class="countdown-timer" data-prop-id="${prop.id}" data-end-time="${prop.bidding.endTime}" data-start-time="${prop.bidding.startTime}">Loading Timer...</span>
@@ -225,10 +225,15 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                         <button class="btn btn-primary claim-listing-btn shadow-hover" data-id="${escapeHtml(prop.id)}" style="flex:1; background: var(--primary);">
                             <i class="ph ph-magnifying-glass-plus"></i> Claim Listing (2% Comm.)
                         </button>
-                    ` : prop.bidding && prop.bidding.enabled ? `
+                    ` : prop.bidding && prop.bidding.enabled && prop.status !== 'Sold' && prop.status !== 'PaymentPending' ? `
                         <button class="btn btn-primary shadow-hover bid-btn" data-id="${escapeHtml(prop.id)}"
                             style="flex:1;" title="Place a bid on this property">
                             <i class="ph ph-gavel"></i> Bid Now
+                        </button>
+                    ` : prop.bidding && (prop.bidding.enabled || prop.bidding.finalized) ? `
+                        <button class="btn btn-secondary shadow-hover bid-btn" data-id="${escapeHtml(prop.id)}"
+                            style="flex:1;" title="View auction results and history">
+                            <i class="ph ph-scroll"></i> View Results
                         </button>
                     ` : `
                         <button class="btn btn-secondary shadow-hover trend-btn" data-id="${escapeHtml(prop.id)}" title="Price History" aria-label="Price History">
