@@ -39,10 +39,12 @@ try {
     let serviceAccount;
     if (fs.existsSync('./serviceAccountKey.json')) {
         serviceAccount = require('./serviceAccountKey.json');
+        console.log('[Firebase Admin] Initializing via local serviceAccountKey.json');
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        console.log('[Firebase Admin] Initializing via FIREBASE_SERVICE_ACCOUNT environment variable');
     } else {
-        throw new Error('Service Account Configuration not provided.');
+        throw new Error('MISSING CONFIG: No serviceAccountKey.json found and FIREBASE_SERVICE_ACCOUNT env var is empty. If on Vercel, please add your service account JSON to the environment variables.');
     }
 
     admin.initializeApp({
@@ -52,7 +54,7 @@ try {
 
     console.log('[Firebase Admin] Successfully initialized.');
 } catch (error) {
-    console.warn('[Firebase Admin] Initialization failed. API routes dependent on Admin SDK may fail:', error.message);
+    console.error('[Firebase Admin Error]', error.message);
 }
 
 // ---------------------------------------------------------
