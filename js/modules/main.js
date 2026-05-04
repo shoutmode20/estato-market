@@ -2316,9 +2316,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.getElementById('bidSuggestions');
         if (!container) return;
         
-        // Suggest minNext, minNext + 10k, minNext + 50k, minNext + 100k
+        // Suggest minNext rounded up to nearest 1k, and then +10k, +50k, +100k increments
+        const baseSuggestion = Math.ceil(minNext / 1000) * 1000;
         const increments = [0, 10000, 50000, 100000];
-        const suggestions = increments.map(inc => minNext + inc);
+        const suggestions = increments.map(inc => baseSuggestion + inc);
 
         container.innerHTML = suggestions.map(amt => `
             <button type="button" class="bid-suggest-chip" data-amount="${amt}" style="padding: 0.5rem 0.9rem; border-radius: 20px; border: 1px solid var(--border-color); background: var(--bg-main); color: var(--primary); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">

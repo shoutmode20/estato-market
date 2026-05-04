@@ -312,8 +312,8 @@ app.post('/api/bidding/place', requireAuth, async (req, res) => {
         if (admin.apps.length === 0) return res.status(500).json({ error: 'Database disconnected' });
         const db = admin.database();
 
-        if (isNaN(bidAmount) || bidAmount <= 0 || bidAmount % 10000 !== 0) {
-            return res.status(400).json({ error: 'Bid amount must be a positive multiple of ₹10,000.' });
+        if (isNaN(bidAmount) || bidAmount <= 0) {
+            return res.status(400).json({ error: 'Bid amount must be a positive number.' });
         }
 
         // Pre-validate using fresh reads
@@ -381,7 +381,10 @@ app.post('/api/bidding/place', requireAuth, async (req, res) => {
         // Step 2: Atomic wallet updates (deduct new bidder, refund previous)
         const walletUpdates = {};
         walletUpdates[`users/${userId}/balance`] = admin.database.ServerValue.increment(-bidAmount);
-        if (prevHighBidderId && prevHighBidderId !== userId && prevHighestAmount > 0) {
+        
+        // Fix: Always refund the previous highest amount if it exists, 
+        // even if the previous bidder was the current user (outbidding themselves).
+        if (prevHighBidderId && prevHighestAmount > 0) {
             walletUpdates[`users/${prevHighBidderId}/balance`] = admin.database.ServerValue.increment(prevHighestAmount);
         }
         await db.ref('/').update(walletUpdates);
