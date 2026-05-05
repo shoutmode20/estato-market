@@ -604,6 +604,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- AUTHENTICATION ENGINE ---
     function checkAuth() {
         currentUser = EstatoStorage.getCurrentUser();
+        
+        loginScreen.classList.add('hidden');
+        loadingOverlay.classList.add('hidden');
+        appContainer.classList.remove('hidden');
+
         if (currentUser) {
             // Global Ban Check
             if (currentUser.isBanned) {
@@ -618,20 +623,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 return;
             }
-
-            loginScreen.classList.add('hidden');
-            loadingOverlay.classList.add('hidden');
-            appContainer.classList.remove('hidden');
             
             const rep = (currentUser.reputation === undefined) ? 5.0 : currentUser.reputation;
             const repFormatted = parseFloat(rep).toFixed(1);
             document.getElementById('headerGreetingText').innerHTML = `Hello, ${currentUser.name.split(' ')[0]} <span style="font-size: 0.85rem; color: #fbbf24; margin-left: 0.5rem; background: rgba(0,0,0,0.05); padding: 0.2rem 0.5rem; border-radius: 20px; border: 1px solid rgba(0,0,0,0.05);"><i class="ph-fill ph-star"></i> ${repFormatted}</span>`;
             document.getElementById('headerRoleBadge').textContent = currentUser.role;
+            document.getElementById('walletBadge').style.display = 'flex';
+        } else {
+            // Guest Mode
+            document.getElementById('headerGreetingText').innerHTML = `Guest User`;
+            document.getElementById('headerRoleBadge').textContent = 'Visitor';
+            document.getElementById('walletBadge').style.display = 'none';
+            // Ensure data is loaded even for guests
+            EstatoStorage.loadAllData();
+        }
 
-            applyRBACToDOM();
-            
-            currentView = (currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? 'dashboard' : 'properties';
-            setActiveNav(currentView);
+        applyRBACToDOM();
+        
+        currentView = currentUser ? ((currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? 'dashboard' : 'properties') : 'properties';
+        setActiveNav(currentView);
             
             setupAppListeners();
             renderView(currentView);
@@ -703,9 +713,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 EstatoStorage.subscribe(_debouncedGlobalUpdate);
             }
-        } else {
-            loginScreen.classList.remove('hidden');
-            appContainer.classList.add('hidden');
+            }
         }
     }
 
@@ -3250,7 +3258,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
                     <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
                 </button>
-                <button class="btn btn-primary shadow-hover" onclick="window.openBidModal('${prop.id}')" style="gap:0.5rem; flex: 1.5;">
+                <button class="btn btn-primary shadow-hover bid-btn" data-id="${prop.id}" style="gap:0.5rem; flex: 1.5;">
                     <i class="ph ph-gavel"></i> Place Bid
                 </button>
             `;
@@ -3269,9 +3277,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Attach local listeners for dynamic buttons inside modal
         const footerBtns = document.getElementById('detailsActionBtns');
+        
+        const bidBtn = footerBtns.querySelector('.bid-btn');
+        if (bidBtn) {
+            bidBtn.addEventListener('click', () => {
+                if (!currentUser) { loginScreen.classList.remove('hidden'); window.closePropertyDetailsModal(); return; }
+                window.openBidModal(prop.id);
+            });
+        }
+        
         const contactBtn = footerBtns.querySelector('.contact-btn');
         if (contactBtn) {
             contactBtn.addEventListener('click', (e) => {
+                if (!currentUser) { loginScreen.classList.remove('hidden'); window.closePropertyDetailsModal(); return; }
                 document.getElementById('propertyDetailsModal').classList.remove('active');
                 document.getElementById('inqPropertyId').value = prop.id;
                 document.getElementById('inqOwnerId').value = prop.ownerId;
@@ -3282,6 +3300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const favBtn = footerBtns.querySelector('.fav-btn');
         if (favBtn) {
             favBtn.addEventListener('click', (e) => {
+                if (!currentUser) { loginScreen.classList.remove('hidden'); window.closePropertyDetailsModal(); return; }
                 EstatoStorage.toggleFavorite(prop.id);
                 const isNowFav = EstatoStorage.getFavorites().includes(prop.id);
                 favBtn.classList.toggle('active', isNowFav);
@@ -3420,6 +3439,7 @@ document.addEventListener('DOMContentLoaded', () => {
         parent.querySelectorAll('.fav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                if (!currentUser) { loginScreen.classList.remove('hidden'); return; }
                 const id = e.currentTarget.getAttribute('data-id');
                 
                 // Immediate visual feedback for better perceived performance
@@ -3443,6 +3463,7 @@ document.addEventListener('DOMContentLoaded', () => {
         parent.querySelectorAll('.bid-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                if (!currentUser) { loginScreen.classList.remove('hidden'); return; }
                 const id = e.currentTarget.getAttribute('data-id');
                 window.openBidModal(id);
             });

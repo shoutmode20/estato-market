@@ -409,8 +409,8 @@ export const EstatoStorage = {
             return;
         }
         _listenersInitialized = true;
-        const uid = _memCache.currentUser.id;
-        const role = _memCache.currentUser.role;
+        const uid = _memCache.currentUser ? _memCache.currentUser.id : null;
+        const role = _memCache.currentUser ? _memCache.currentUser.role : 'Guest';
 
         console.log("[Estato Firebase] Initializing Real-time Listeners...");
         if (!db) return;
@@ -425,67 +425,73 @@ export const EstatoStorage = {
             }, (err) => console.error("[Storage] Property Listener Error:", err.message));
 
             // 2. User-specific favorites
-            _trackListener(db.ref('favorites/' + uid), (snap) => {
-                _setState({ favorites: snap.exists() ? (snap.val().ids || []) : [] });
-            }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
+            if (uid) {
+                _trackListener(db.ref('favorites/' + uid), (snap) => {
+                    _setState({ favorites: snap.exists() ? (snap.val().ids || []) : [] });
+                }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
+            }
 
             // 3. Inquiries — Private isolated sync for all users
-            const _inquiryCacheMap = new Map();
-            const updateCache = () => {
-                const inquiries = Array.from(_inquiryCacheMap.values())
-                    .sort((a,b) => {
-                        const getLatestDate = (inq) => {
-                            if (inq.replies && inq.replies.length > 0) {
-                                const last = inq.replies[inq.replies.length - 1];
-                                return new Date(last.date || last.timestamp);
-                            }
-                            return new Date(inq.date || inq.timestamp);
-                        };
-                        return getLatestDate(b) - getLatestDate(a);
-                    });
-                _setState({ inquiries });
-            };
+            if (uid) {
+                const _inquiryCacheMap = new Map();
+                const updateCache = () => {
+                    const inquiries = Array.from(_inquiryCacheMap.values())
+                        .sort((a,b) => {
+                            const getLatestDate = (inq) => {
+                                if (inq.replies && inq.replies.length > 0) {
+                                    const last = inq.replies[inq.replies.length - 1];
+                                    return new Date(last.date || last.timestamp);
+                                }
+                                return new Date(inq.date || inq.timestamp);
+                            };
+                            return getLatestDate(b) - getLatestDate(a);
+                        });
+                    _setState({ inquiries });
+                };
 
-            console.log(`[Storage] Initializing secure PRIVATE inquiry listener for ${uid}`);
-            _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
-                if (!snap.exists()) {
-                    _inquiryCacheMap.clear();
-                    updateCache();
-                    return;
-                }
-                
-                const indexedIds = Object.keys(snap.val());
-                
-                // Cleanup removed items
-                for (const inqId of _inquiryCacheMap.keys()) {
-                    if (!indexedIds.includes(inqId)) _inquiryCacheMap.delete(inqId);
-                }
-
-                // Attach detail listeners for each indexed thread
-                indexedIds.forEach(inqId => {
-                    if (!_inquiryCacheMap.has(inqId)) {
-                         _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
-                            if (inqSnap.exists()) {
-                                _inquiryCacheMap.set(inqId, { id: inqId, ...inqSnap.val() });
-                            } else {
-                                _inquiryCacheMap.delete(inqId);
-                            }
-                            updateCache();
-                        }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
+                console.log(`[Storage] Initializing secure PRIVATE inquiry listener for ${uid}`);
+                _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
+                    if (!snap.exists()) {
+                        _inquiryCacheMap.clear();
+                        updateCache();
+                        return;
                     }
-                });
-            }, (err) => console.error("[Storage] Inquiry Index Listener Error:", err.message));
+                    
+                    const indexedIds = Object.keys(snap.val());
+                    
+                    // Cleanup removed items
+                    for (const inqId of _inquiryCacheMap.keys()) {
+                        if (!indexedIds.includes(inqId)) _inquiryCacheMap.delete(inqId);
+                    }
 
-            // 6. Legacy Migration (Self-healing for Admins only)
-            // This discovers threads that existed before the index was created.
-            if (role === 'Admin') {
-                this._performInquiryMigration(uid, role);
+                    // Attach detail listeners for each indexed thread
+                    indexedIds.forEach(inqId => {
+                        if (!_inquiryCacheMap.has(inqId)) {
+                             _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
+                                if (inqSnap.exists()) {
+                                    _inquiryCacheMap.set(inqId, { id: inqId, ...inqSnap.val() });
+                                } else {
+                                    _inquiryCacheMap.delete(inqId);
+                                }
+                                updateCache();
+                            }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
+                        }
+                    });
+                }, (err) => console.error("[Storage] Inquiry Index Listener Error:", err.message));
+
+                // 6. Legacy Migration (Self-healing for Admins only)
+                // This discovers threads that existed before the index was created.
+                if (role === 'Admin') {
+                    this._performInquiryMigration(uid, role);
+                }
             }
 
             // 4. Personal notifications
-            _trackListener(db.ref('notifications/' + uid), (snap) => {
-                _setState({ notifications: snap.exists() ? (snap.val().items || []) : [] });
-            }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
+            if (uid) {
+                _trackListener(db.ref('notifications/' + uid), (snap) => {
+                    _setState({ notifications: snap.exists() ? (snap.val().items || []) : [] });
+                }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
+            }
 
             // 5. Platform activity feed (latest 100, admin-read-only in DB rules)
             _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
