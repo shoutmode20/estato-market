@@ -609,12 +609,24 @@ document.addEventListener('DOMContentLoaded', () => {
             loginScreen.classList.add('hidden');
             loadingOverlay.classList.add('hidden');
             appContainer.classList.remove('hidden');
+            // Ensure auth card is visible for next time
+            const authCard = loginScreen.querySelector('.auth-card');
+            if (authCard) authCard.style.display = 'block';
         } else {
             // Guest Mode: Revert to Login Screen as background
             loginScreen.classList.remove('hidden');
             loadingOverlay.classList.add('hidden');
             appContainer.classList.add('hidden');
             
+            // IF Deep Link: Hide the login card to show the "Brochure" background only
+            if (window.location.pathname.startsWith('/property/')) {
+                const authCard = loginScreen.querySelector('.auth-card');
+                if (authCard) authCard.style.display = 'none';
+            } else {
+                const authCard = loginScreen.querySelector('.auth-card');
+                if (authCard) authCard.style.display = 'block';
+            }
+
             // Still load all data so we can resolve deep links
             EstatoStorage.loadAllData();
         }
@@ -3251,6 +3263,16 @@ document.addEventListener('DOMContentLoaded', () => {
         let btnHtml = '';
         if (isOwnerOfListing) {
             btnHtml = ``;
+        } else if (!currentUser) {
+            // Guest/Brochure Mode buttons
+            btnHtml = `
+                <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${prop.id}" data-title="${escapeHtml(prop.title)}" title="Share Property">
+                    <i class="ph ph-share-network"></i>
+                </button>
+                <button class="btn btn-primary shadow-hover" onclick="location.reload()" style="flex: 1.5; gap: 0.5rem;">
+                    <i class="ph ph-user"></i> Sign in to Bid or Message
+                </button>
+            `;
         } else if (prop.bidding && prop.bidding.enabled) {
             btnHtml = `
                 <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${prop.id}" data-title="${escapeHtml(prop.title)}" title="Share Property">

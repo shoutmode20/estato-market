@@ -7,7 +7,7 @@
       }
     },
     "properties": {
-      ".read": "auth != null",
+      ".read": true,
       "$propId": {
         ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'Admin' || (!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid))) && (!newData.child('highestBid').exists() || newData.child('highestBid').val() === data.child('highestBid').val()) && (!newData.child('highestBidderId').exists() || newData.child('highestBidderId').val() === data.child('highestBidderId').val()) && (!newData.child('winnerId').exists() || newData.child('winnerId').val() === data.child('winnerId').val())"
       }
