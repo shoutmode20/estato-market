@@ -605,9 +605,19 @@ document.addEventListener('DOMContentLoaded', () => {
     function checkAuth() {
         currentUser = EstatoStorage.getCurrentUser();
         
-        loginScreen.classList.add('hidden');
-        loadingOverlay.classList.add('hidden');
-        appContainer.classList.remove('hidden');
+        if (currentUser) {
+            loginScreen.classList.add('hidden');
+            loadingOverlay.classList.add('hidden');
+            appContainer.classList.remove('hidden');
+        } else {
+            // Guest Mode: Revert to Login Screen as background
+            loginScreen.classList.remove('hidden');
+            loadingOverlay.classList.add('hidden');
+            appContainer.classList.add('hidden');
+            
+            // Still load all data so we can resolve deep links
+            EstatoStorage.loadAllData();
+        }
 
         if (currentUser) {
             // Global Ban Check
@@ -629,13 +639,6 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('headerGreetingText').innerHTML = `Hello, ${currentUser.name.split(' ')[0]} <span style="font-size: 0.85rem; color: #fbbf24; margin-left: 0.5rem; background: rgba(0,0,0,0.05); padding: 0.2rem 0.5rem; border-radius: 20px; border: 1px solid rgba(0,0,0,0.05);"><i class="ph-fill ph-star"></i> ${repFormatted}</span>`;
             document.getElementById('headerRoleBadge').textContent = currentUser.role;
             document.getElementById('walletBadge').style.display = 'flex';
-        } else {
-            // Guest Mode
-            document.getElementById('headerGreetingText').innerHTML = `Guest User`;
-            document.getElementById('headerRoleBadge').textContent = 'Visitor';
-            document.getElementById('walletBadge').style.display = 'none';
-            // Ensure data is loaded even for guests
-            EstatoStorage.loadAllData();
         }
 
         applyRBACToDOM();
