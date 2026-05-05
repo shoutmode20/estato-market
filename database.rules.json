@@ -46,6 +46,12 @@
         ".validate": "newData.hasChildren(['userId', 'action', 'details', 'timestamp', 'role']) && newData.child('userId').val() === auth.uid && root.child('users').child(auth.uid).child('role').val() === newData.child('role').val()"
       }
     },
+    "wallet_transactions": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": false
+      }
+    },
     "reviews": {
       ".read": "auth != null",
       "$revId": {

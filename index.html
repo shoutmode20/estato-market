@@ -613,8 +613,8 @@
                     <form id="bidForm">
                         <input type="hidden" id="bidPropertyId">
                         <div class="form-group">
-                            <label>Your Bid Amount (In multiples of ₹10,000)</label>
-                            <input type="number" id="bidAmountInput" required step="10000" style="font-size: 1.25rem; padding: 1rem; text-align: center; border: 2px solid var(--primary);">
+                            <label>Your Bid Amount</label>
+                            <input type="number" id="bidAmountInput" required step="1" min="1" style="font-size: 1.25rem; padding: 1rem; text-align: center; border: 2px solid var(--primary);">
                             
                             <div id="bidSuggestions" style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; flex-wrap: wrap;">
                                 <!-- Suggestions injected here -->
@@ -681,33 +681,54 @@
 
     <!-- Wallet / Top-up Modal -->
     <div class="modal-overlay" id="walletModal">
-        <div class="modal surface-panel" style="max-width: 400px;">
+        <div class="modal surface-panel" style="max-width: 460px;">
             <div class="modal-header">
                 <h3>Virtual Wallet</h3>
                 <button class="close-btn" onclick="document.getElementById('walletModal').classList.remove('active')"><i class="ph ph-x"></i></button>
             </div>
-            <div class="modal-body" style="text-align: center; padding: 2rem 1.5rem;">
-                <div style="margin-bottom: 2rem;">
-                    <div style="font-size: 3rem; color: var(--primary); margin-bottom: 1rem;"><i class="ph-duotone ph-wallet"></i></div>
-                    <p style="color: var(--text-muted); margin-bottom: 0.5rem;">Current Balance</p>
-                    <h2 id="walletBalanceDisplay" style="font-size: 2.5rem; font-weight: 800; color: var(--text-main);">₹100,000</h2>
+            <div class="modal-body" style="padding: 1.5rem;">
+                <!-- Balance Header -->
+                <div style="text-align: center; margin-bottom: 1.5rem; padding: 1.25rem; background: linear-gradient(135deg, var(--primary), #c2410c); border-radius: var(--radius-md); color: white;">
+                    <div style="font-size: 1.75rem; margin-bottom: 0.4rem; opacity: 0.85;"><i class="ph-duotone ph-wallet"></i></div>
+                    <p style="margin-bottom: 0.25rem; opacity: 0.8; font-size: 0.85rem;">Current Balance</p>
+                    <h2 id="walletBalanceDisplay" style="font-size: 2rem; font-weight: 800; margin: 0; color: white;">₹100,000</h2>
                 </div>
-                
-                <div style="background: var(--bg-hover); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-                    <h4 style="margin-bottom: 1rem;">Top-up (Simulation)</h4>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
-                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="10000">+ ₹10k</button>
-                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000">+ ₹50k</button>
-                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000" style="background:#f8fafc;">+ ₹50,000</button>
-                        <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="100000" style="background:#f8fafc;">+ ₹1,00,000</button>
+                <!-- Tabs -->
+                <div style="display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 1.25rem;">
+                    <button id="walletTabTopup" onclick="window.switchWalletTab('topup')" style="flex:1; padding: 0.6rem; border: none; background: none; font-weight: 700; font-size: 0.9rem; cursor: pointer; color: var(--primary); border-bottom: 3px solid var(--primary); margin-bottom: -2px; transition: all 0.2s;">
+                        <i class="ph ph-plus-circle"></i> Top-up
+                    </button>
+                    <button id="walletTabHistory" onclick="window.switchWalletTab('history')" style="flex:1; padding: 0.6rem; border: none; background: none; font-weight: 700; font-size: 0.9rem; cursor: pointer; color: var(--text-muted); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s;">
+                        <i class="ph ph-clock-clockwise"></i> History
+                    </button>
+                </div>
+                <!-- Top-up Panel -->
+                <div id="walletPanelTopup">
+                    <div style="background: var(--bg-hover); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 1rem;">
+                        <h4 style="margin-bottom: 1rem; font-size: 0.9rem;">Quick Add (Simulation)</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;">
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="10000">+ ₹10,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000">+ ₹50,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="100000">+ ₹1,00,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="500000">+ ₹5,00,000</button>
+                        </div>
+                    </div>
+                    <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">Or enter a custom amount:</p>
+                        <div style="display: flex; gap: 0.75rem;">
+                            <input type="number" id="customAmountInput" placeholder="Amount (multiples of 1000)" style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem;">
+                            <button class="btn btn-primary" id="addCustomFundsBtn">Add Funds</button>
+                        </div>
                     </div>
                 </div>
-                
-                <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">Or enter a custom amount:</p>
-                    <div style="display: flex; gap: 0.75rem;">
-                        <input type="number" id="customAmountInput" placeholder="Amount (multiples of 1000)" style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem;">
-                        <button class="btn btn-primary" id="addCustomFundsBtn">Add Funds</button>
+                <!-- Transaction History Panel -->
+                <div id="walletPanelHistory" style="display: none;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">Last 50 transactions</span>
+                        <span id="txCountBadge" style="font-size: 0.75rem; color: var(--text-muted); background: var(--bg-hover); padding: 0.2rem 0.6rem; border-radius: 10px; border: 1px solid var(--border-color);">Loading...</span>
+                    </div>
+                    <div id="walletTransactionList" style="max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+                        <p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 2rem 0;"><i class="ph ph-spinner ph-spin"></i> Loading...</p>
                     </div>
                 </div>
             </div>

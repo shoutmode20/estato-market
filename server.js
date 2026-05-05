@@ -113,7 +113,25 @@ async function writeAuditLog(req, action, details, metadata = {}) {
     }
 }
 
-// Health / Status Check Endpoint (public)
+// Helper: Write wallet transaction log for a single user
+async function writeWalletTransaction(db, userId, type, amount, description, meta = {}) {
+    try {
+        const sanitized = {};
+        Object.keys(meta).forEach(k => { if (meta[k] !== undefined) sanitized[k] = meta[k]; });
+        const entry = {
+            type,                          // DEPOSIT | BID_PLACED | BID_REFUND | ENTRY_FEE | ENTRY_FEE_REFUND | SALE_PAYOUT | COMMISSION
+            amount: Number(amount),        // Always positive
+            direction: amount >= 0 ? 'credit' : 'debit',
+            description,
+            timestamp: new Date().toISOString(),
+            ...sanitized
+        };
+        await db.ref(`wallet_transactions/${userId}`).push(entry);
+    } catch (e) {
+        console.warn('[WalletTx] Failed to log transaction:', e.message);
+    }
+}
+
 app.get('/api/status', (req, res) => {
     res.json({
         status: 'online',
@@ -270,6 +288,11 @@ app.post('/api/bidding/entry', requireAuth, async (req, res) => {
             await db.ref(`users/${userId}/balance`).set(
                 admin.database.ServerValue.increment(-fee)
             );
+            // Log wallet transaction
+            await writeWalletTransaction(db, userId, 'ENTRY_FEE', -fee,
+                `Entry fee paid for auction: ${prop.title || propertyId}`,
+                { propertyId, propertyTitle: prop.title || propertyId }
+            );
         }
 
         writeAuditLog(req, 'AUCTION_ENTRY_FEE_PAID', `User joined auction for property ${propertyId}`, { propertyId, fee });
@@ -400,6 +423,19 @@ app.post('/api/bidding/place', requireAuth, async (req, res) => {
             walletUpdates[`users/${prevHighBidderId}/balance`] = admin.database.ServerValue.increment(prevHighestAmount);
         }
         await db.ref('/').update(walletUpdates);
+
+        // Log wallet transactions
+        const propTitle = result.snapshot.val()?.title || propertyId;
+        await writeWalletTransaction(db, userId, 'BID_PLACED', -bidAmount,
+            `Bid placed on: ${propTitle}`,
+            { propertyId, propertyTitle: propTitle, bidAmount }
+        );
+        if (prevHighBidderId && prevHighestAmount > 0 && prevHighBidderId !== userId) {
+            await writeWalletTransaction(db, prevHighBidderId, 'BID_REFUND', prevHighestAmount,
+                `Outbid refund for: ${propTitle}`,
+                { propertyId, propertyTitle: propTitle, refundAmount: prevHighestAmount }
+            );
+        }
 
         writeAuditLog(req, 'BID_PLACED', `User placed bid of ₹${bidAmount.toLocaleString('en-IN')} on property ${propertyId}`, { propertyId, bidAmount, prevHighBidderId, prevHighestAmount });
         res.json({ success: true });
@@ -708,15 +744,26 @@ setInterval(async () => {
                     const updates = {};
                     const winnerId = p.winnerId;
                     const finalPrice = Number(p.highestBid || p.bidding.basePrice || 0);
+                    const propTitle = p.title || propertyId;
 
                     if (winnerId) {
                         if (p.ownerId) {
                             const commission = p.assignedBrokerId ? Math.floor(finalPrice * 0.02) : 0;
                             const sellerPayout = finalPrice - commission;
-                            
                             updates[`users/${p.ownerId}/balance`] = admin.database.ServerValue.increment(sellerPayout);
                             if (commission > 0 && p.assignedBrokerId) {
                                 updates[`users/${p.assignedBrokerId}/balance`] = admin.database.ServerValue.increment(commission);
+                            }
+                            // Wallet transaction logs for seller & broker
+                            await writeWalletTransaction(db, p.ownerId, 'SALE_PAYOUT', sellerPayout,
+                                `Sale payout for: ${propTitle}`,
+                                { propertyId, propertyTitle: propTitle, finalPrice, winnerId }
+                            );
+                            if (commission > 0 && p.assignedBrokerId) {
+                                await writeWalletTransaction(db, p.assignedBrokerId, 'COMMISSION', commission,
+                                    `2% commission from sale of: ${propTitle}`,
+                                    { propertyId, propertyTitle: propTitle, finalPrice }
+                                );
                             }
                         }
                         updates[`users/${winnerId}/reputation`] = admin.database.ServerValue.increment(0.1);
@@ -726,7 +773,14 @@ setInterval(async () => {
                     for (const [pId, pData] of Object.entries(participants)) {
                         if (pId !== winnerId) {
                             const refund = Number(pData.paidFee || 0);
-                            if (refund > 0) updates[`users/${pId}/balance`] = admin.database.ServerValue.increment(refund);
+                            if (refund > 0) {
+                                updates[`users/${pId}/balance`] = admin.database.ServerValue.increment(refund);
+                                // Log entry fee refund for losing participants
+                                await writeWalletTransaction(db, pId, 'ENTRY_FEE_REFUND', refund,
+                                    `Entry fee refund – auction ended: ${propTitle}`,
+                                    { propertyId, propertyTitle: propTitle, refund }
+                                );
+                            }
                         }
                     }
 

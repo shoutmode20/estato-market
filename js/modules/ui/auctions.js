@@ -1,7 +1,7 @@
-import { generatePropertyCard } from './property-card.js';
+// generatePropertyCard is passed via ctx from main.js (includes user context)
 
 export function renderAuctions(ctx) {
-    const { currentUser, EstatoStorage, viewContainer, attachCardListeners } = ctx;
+    const { currentUser, EstatoStorage, viewContainer, attachCardListeners, generatePropertyCard } = ctx;
     
     let html = `
         <div class="section-header" style="margin-bottom: 2rem;">
@@ -49,7 +49,7 @@ export function renderAuctions(ctx) {
     } else {
         html += `
             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
-                ${relevantProps.map(p => generatePropertyCard(p)).join('')}
+                ${relevantProps.map((p, i) => generatePropertyCard(p, i)).join('')}
             </div>
         `;
     }

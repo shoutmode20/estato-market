@@ -1743,7 +1743,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderAuctions() {
         const viewContainer = document.getElementById('viewContainer');
         externalRenderAuctions({
-            currentUser, EstatoStorage, viewContainer, attachCardListeners
+            currentUser, EstatoStorage, viewContainer, attachCardListeners,
+            generatePropertyCard
         });
     }
     function renderCities() {
@@ -2202,8 +2203,78 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.openWalletModal = () => {
         updateWalletUI();
+        // Always open on Top-up tab by default
+        window.switchWalletTab('topup');
         document.getElementById('walletModal').classList.add('active');
     };
+
+    window.switchWalletTab = (tab) => {
+        const panels = { topup: 'walletPanelTopup', history: 'walletPanelHistory' };
+        const tabs   = { topup: 'walletTabTopup',   history: 'walletTabHistory'   };
+        Object.keys(panels).forEach(key => {
+            const panel = document.getElementById(panels[key]);
+            const btn   = document.getElementById(tabs[key]);
+            if (!panel || !btn) return;
+            const active = key === tab;
+            panel.style.display = active ? '' : 'none';
+            btn.style.color = active ? 'var(--primary)' : 'var(--text-muted)';
+            btn.style.borderBottom = active ? '3px solid var(--primary)' : '3px solid transparent';
+        });
+        if (tab === 'history') window.loadWalletTransactions();
+    };
+
+    window.loadWalletTransactions = async () => {
+        const list  = document.getElementById('walletTransactionList');
+        const badge = document.getElementById('txCountBadge');
+        if (!list) return;
+
+        list.innerHTML = `<p style="text-align:center;color:var(--text-muted);padding:1.5rem 0;font-size:0.85rem;"><i class="ph ph-spinner ph-spin"></i> Loading...</p>`;
+
+        try {
+            const txs = await EstatoStorage.getWalletTransactions();
+            if (badge) badge.textContent = `${txs.length} record${txs.length !== 1 ? 's' : ''}`;
+
+            if (txs.length === 0) {
+                list.innerHTML = `<p style="text-align:center;color:var(--text-muted);padding:2rem 0;font-size:0.85rem;"><i class="ph ph-clock-clockwise" style="font-size:1.5rem;display:block;margin-bottom:0.5rem;"></i>No transactions yet.</p>`;
+                return;
+            }
+
+            const typeConfig = {
+                'DEPOSIT':          { label: 'Wallet Top-up',      icon: 'ph-arrow-circle-down',  color: '#16a34a' },
+                'BID_PLACED':       { label: 'Bid Placed',          icon: 'ph-gavel',              color: '#dc2626' },
+                'BID_REFUND':       { label: 'Outbid Refund',       icon: 'ph-arrow-circle-up',    color: '#16a34a' },
+                'ENTRY_FEE':        { label: 'Auction Entry Fee',   icon: 'ph-ticket',             color: '#dc2626' },
+                'ENTRY_FEE_REFUND': { label: 'Entry Fee Refund',    icon: 'ph-arrow-circle-up',    color: '#16a34a' },
+                'SALE_PAYOUT':      { label: 'Sale Payout',         icon: 'ph-currency-inr',       color: '#16a34a' },
+                'COMMISSION':       { label: 'Broker Commission',   icon: 'ph-handshake',          color: '#16a34a' },
+            };
+
+            list.innerHTML = txs.map(tx => {
+                const cfg      = typeConfig[tx.type] || { label: tx.type, icon: 'ph-swap', color: '#6b7280' };
+                const isCredit = tx.direction === 'credit' || Number(tx.amount) > 0;
+                const absAmt   = Math.abs(tx.amount);
+                const amtStr   = currencyFormatter.format(absAmt);
+                const dateStr  = new Date(tx.timestamp).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+                return `
+                    <div style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;border-radius:var(--radius-sm);background:var(--bg-hover);border:1px solid var(--border-color);">
+                        <div style="width:36px;height:36px;border-radius:50%;background:${isCredit ? '#dcfce7' : '#fee2e2'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                            <i class="ph-fill ${cfg.icon}" style="color:${cfg.color};font-size:1rem;"></i>
+                        </div>
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:600;font-size:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cfg.label}</div>
+                            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(tx.description || '')}">${escapeHtml(tx.description || '')}</div>
+                        </div>
+                        <div style="text-align:right;flex-shrink:0;">
+                            <div style="font-weight:700;font-size:0.9rem;color:${isCredit ? '#16a34a' : '#dc2626'};">${isCredit ? '+' : '-'}${amtStr}</div>
+                            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:1px;">${dateStr}</div>
+                        </div>
+                    </div>`;
+            }).join('');
+        } catch (err) {
+            list.innerHTML = `<p style="text-align:center;color:var(--danger);padding:1rem 0;font-size:0.85rem;">Failed to load transactions.</p>`;
+        }
+    };
+
 
     // --- Global Wallet Event Delegation ---
     document.body.addEventListener('click', async (e) => {
@@ -2246,7 +2317,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.openBidModal = (id) => {
         const prop = EstatoStorage.getPropertyById(id);
-        if (!prop || !prop.bidding || !prop.bidding.enabled) return;
+        if (!prop || !prop.bidding || (!prop.bidding.enabled && !prop.bidding.finalized)) return;
 
         document.getElementById('bidPropertyId').value = id;
         document.getElementById('bidPropTitle').textContent = prop.title;
@@ -2256,25 +2327,54 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('minNextBid').textContent = currencyFormatter.format(currentHighest + (prop.bidding.minIncrement || 10000));
         document.getElementById('bidAmountInput').value = currentHighest + (prop.bidding.minIncrement || 10000);
 
-        // Check entry fee participation
-        const participants = prop.bidding.participants || {};
-        const feePaid = !!participants[currentUser.id];
-
         const feeSection = document.getElementById('feePaymentSection');
         const bidSection = document.getElementById('bidPlacementSection');
-        
-        if (feePaid) {
+        const isFinalized = prop.bidding.finalized || prop.status === 'Sold' || prop.status === 'PaymentPending';
+
+        if (isFinalized) {
+            // Auction is over — hide bidding UI, show results banner
             feeSection.classList.add('hidden');
-            bidSection.classList.remove('hidden');
-        } else {
-            feeSection.classList.remove('hidden');
             bidSection.classList.add('hidden');
-            document.getElementById('bidEntryFeeAmount').textContent = currencyFormatter.format(prop.bidding.entryFee || 5000);
+
+            // Inject or update a results banner
+            let resultsBanner = document.getElementById('auctionResultsBanner');
+            if (!resultsBanner) {
+                resultsBanner = document.createElement('div');
+                resultsBanner.id = 'auctionResultsBanner';
+                feeSection.parentNode.insertBefore(resultsBanner, feeSection);
+            }
+            const winnerName = prop.winnerName || prop.highestBidderName || 'No bids placed';
+            const hadWinner = !!prop.winnerId;
+            resultsBanner.style.cssText = 'display:block; text-align:center; padding:1.5rem; background:' + (hadWinner ? 'rgba(22,163,74,0.08)' : 'var(--bg-hover)') + '; border:1px solid ' + (hadWinner ? '#bbf7d0' : 'var(--border-color)') + '; border-radius:var(--radius-md); margin-bottom:1rem;';
+            resultsBanner.innerHTML = hadWinner
+                ? `<div style="font-size:2rem;margin-bottom:0.5rem;">🏆</div>
+                   <div style="font-weight:800;font-size:1rem;color:#16a34a;">Auction Closed</div>
+                   <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.4rem;">Winner: <strong style="color:var(--text-main);">${escapeHtml(winnerName)}</strong></div>
+                   <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.2rem;">Final Price: <strong style="color:var(--primary);">${currencyFormatter.format(currentHighest)}</strong></div>`
+                : `<div style="font-size:2rem;margin-bottom:0.5rem;">🔨</div>
+                   <div style="font-weight:800;font-size:1rem;color:var(--text-muted);">Auction Ended</div>
+                   <div style="font-size:0.85rem;color:var(--text-muted);margin-top:0.4rem;">No bids were placed.</div>`;
+        } else {
+            // Hide results banner if present
+            const existing = document.getElementById('auctionResultsBanner');
+            if (existing) existing.style.display = 'none';
+
+            // Check entry fee participation
+            const participants = prop.bidding.participants || {};
+            const feePaid = !!participants[currentUser.id];
+            if (feePaid) {
+                feeSection.classList.add('hidden');
+                bidSection.classList.remove('hidden');
+            } else {
+                feeSection.classList.remove('hidden');
+                bidSection.classList.add('hidden');
+                document.getElementById('bidEntryFeeAmount').textContent = currencyFormatter.format(prop.bidding.entryFee || 5000);
+            }
+            renderBidSuggestions(currentHighest + (prop.bidding.minIncrement || 10000));
         }
 
         document.getElementById('bidModal').classList.add('active');
-        updateAllCountdowns(); // Initial update for time left
-        renderBidSuggestions(currentHighest + (prop.bidding.minIncrement || 10000));
+        updateAllCountdowns();
         renderBidHistory(prop);
     };
 
@@ -2285,30 +2385,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const bids = prop.bids ? Object.values(prop.bids) : [];
         const sortedBids = bids.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const isFinalized = prop.bidding && (prop.bidding.finalized || prop.status === 'Sold' || prop.status === 'PaymentPending');
 
         if (badge) badge.textContent = `${sortedBids.length} Bids`;
 
         if (sortedBids.length === 0) {
-            timeline.innerHTML = '<p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 1rem;">No bids yet. Be the first!</p>';
+            timeline.innerHTML = '<p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 1rem;">No bids were placed.</p>';
             return;
         }
 
         timeline.innerHTML = sortedBids.map((bid, i) => {
-            const isLatest = i === 0;
-            const timeStr = new Date(bid.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            
+            const isTopBid   = i === 0;
+            const isWinner   = isFinalized && isTopBid;
+            const timeStr    = new Date(bid.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const accentColor  = isWinner ? '#16a34a' : 'var(--primary)';
+            const bgColor      = isWinner ? 'rgba(22,163,74,0.06)' : (isTopBid ? 'rgba(234,88,12,0.05)' : 'var(--bg-main)');
+            const borderColor  = isWinner ? '#bbf7d0' : (isTopBid ? 'var(--primary)' : 'var(--border-color)');
+            const statusLabel  = isWinner
+                ? `<span style="display:block;font-size:0.65rem;color:#16a34a;font-weight:800;text-transform:uppercase;margin-bottom:2px;">🏆 Winner</span>`
+                : (isTopBid && !isFinalized
+                    ? `<span style="display:block;font-size:0.65rem;color:var(--primary);font-weight:800;text-transform:uppercase;margin-bottom:2px;">Leading</span>`
+                    : '');
+
             return `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem; border-radius: var(--radius-sm); background: ${isLatest ? 'rgba(234, 88, 12, 0.05)' : 'var(--bg-main)'}; border: 1px solid ${isLatest ? 'var(--primary)' : 'var(--border-color)'}; border-left: 3px solid ${isLatest ? 'var(--primary)' : 'var(--border-color)'};">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;border-radius:var(--radius-sm);background:${bgColor};border:1px solid ${borderColor};border-left:3px solid ${accentColor};">
                     <div>
-                        <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-main);">${currencyFormatter.format(bid.amount)}</div>
-                        <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(bid.userName)}</div>
+                        <div style="font-weight:700;font-size:0.95rem;color:var(--text-main);">${currencyFormatter.format(bid.amount)}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);">${escapeHtml(bid.userName)}</div>
                     </div>
-                    <div style="text-align: right;">
-                        ${isLatest ? '<span style="display: block; font-size: 0.65rem; color: var(--primary); font-weight: 800; text-transform: uppercase; margin-bottom: 2px;">Leading</span>' : ''}
-                        <div style="font-size: 0.75rem; color: var(--text-muted); opacity: 0.8;">${timeStr}</div>
+                    <div style="text-align:right;">
+                        ${statusLabel}
+                        <div style="font-size:0.75rem;color:var(--text-muted);opacity:0.8;">${timeStr}</div>
                     </div>
-                </div>
-            `;
+                </div>`;
         }).join('');
     }
 

@@ -1304,14 +1304,44 @@ export const EstatoStorage = {
         try {
             const newBalance = (user.balance || 0) + addAmount;
             await _syncToCloud(`users/${user.id}/balance`, newBalance, 'set');
+            // Log wallet transaction
+            if (db) {
+                await db.ref(`wallet_transactions/${user.id}`).push({
+                    type: 'DEPOSIT',
+                    amount: addAmount,
+                    direction: 'credit',
+                    description: `Wallet top-up of \u20b9${addAmount.toLocaleString()}`,
+                    timestamp: new Date().toISOString()
+                });
+            }
             const currentUser = { ..._memCache.currentUser, balance: newBalance };
             _setState({ currentUser });
-            this.logActivity('WALLET_DEPOSIT', `Added ₹${addAmount.toLocaleString()} to wallet`);
+            this.logActivity('WALLET_DEPOSIT', `Added \u20b9${addAmount.toLocaleString()} to wallet`);
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
             if (_syncCallback) _syncCallback('error');
             throw e;
+        }
+    },
+
+    async getWalletTransactions() {
+        const user = _memCache.currentUser;
+        if (!user || !db) return [];
+        try {
+            const snap = await db.ref(`wallet_transactions/${user.id}`)
+                .orderByChild('timestamp')
+                .limitToLast(50)
+                .once('value');
+            if (!snap.exists()) return [];
+            const raw = snap.val();
+            // Convert Firebase object to array, sorted newest first
+            return Object.entries(raw)
+                .map(([key, val]) => ({ id: key, ...val }))
+                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        } catch (e) {
+            console.warn('[Storage] getWalletTransactions failed:', e.message);
+            return [];
         }
     },
 
@@ -1381,12 +1411,7 @@ export const EstatoStorage = {
             throw new Error(`Minimum bid required is ₹${(currentHighest + minIncrement).toLocaleString()}.`);
         }
 
-        // 4. Multiple of 10,000 Rule (As per requirements)
-        if (bidAmount % 10000 !== 0) {
-            throw new Error('Bid amount must be in multiples of ₹10,000.');
-        }
-
-        // 5. Balance Validation
+        // 4. Balance Validation
         if ((user.balance || 0) < bidAmount) {
             throw new Error(`Insufficient wallet balance. You need ₹${bidAmount.toLocaleString()} but currently have ₹${(user.balance || 0).toLocaleString()}.`);
         }
