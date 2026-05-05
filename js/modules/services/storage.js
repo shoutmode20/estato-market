@@ -1314,8 +1314,9 @@ export const EstatoStorage = {
             
             // 2. Log wallet transaction (Separate attempt, don't block balance update)
             try {
-                if (db) {
-                    await db.ref(`wallet_transactions/${user.id}`).push({
+                if (db && firebase.auth().currentUser) {
+                    const uid = firebase.auth().currentUser.uid;
+                    await db.ref(`wallet_transactions/${uid}`).push({
                         type: 'DEPOSIT',
                         amount: addAmount,
                         direction: 'credit',
