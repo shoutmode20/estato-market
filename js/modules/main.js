@@ -597,8 +597,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch(e) {}
 
-        // 3. Fallback to login screen
-        loginScreen.classList.remove('hidden');
+        // 3. Fallback to Guest Mode instead of login screen
+        checkAuth();
     }
 
     // --- AUTHENTICATION ENGINE ---
@@ -713,8 +713,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 EstatoStorage.subscribe(_debouncedGlobalUpdate);
             }
-            }
-        }
     }
 
     function setupAuthListeners() {
