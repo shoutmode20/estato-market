@@ -19,14 +19,14 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
     <!-- PDF Generation libs removed from head (already declared at bottom with defer/async if needed) -->
     <!-- PWA Config -->
-    <link rel="manifest" href="./manifest.json">
+    <link rel="manifest" href="/manifest.json">
     
     <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/buildings.png">
     <!-- Styles -->
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
-    <link rel="stylesheet" href="./css/styles.css?v=12.1">
+    <link rel="stylesheet" href="/css/styles.css?v=12.1">
     <style>
         .fav-btn.active i { color: #ef4444 !important; }
     </style>
@@ -746,13 +746,13 @@
     <!-- jsPDF + autoTable for PDF/CSV export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-    <script src="./js/config.js"></script>
-    <script type="module" src="./js/modules/main.js?v=12.9"></script>
+    <script src="/js/config.js"></script>
+    <script type="module" src="/js/modules/main.js?v=12.9"></script>
     <!-- PWA Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
+                navigator.serviceWorker.register('/sw.js')
                     .then(reg => console.log('SW registered:', reg.scope))
                     .catch(err => console.log('SW registration failed:', err));
             });
