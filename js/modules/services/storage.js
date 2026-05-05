@@ -1311,15 +1311,20 @@ export const EstatoStorage = {
         try {
             const newBalance = (user.balance || 0) + addAmount;
             await _syncToCloud(`users/${user.id}/balance`, newBalance, 'set');
-            // Log wallet transaction
-            if (db) {
-                await db.ref(`wallet_transactions/${user.id}`).push({
-                    type: 'DEPOSIT',
-                    amount: addAmount,
-                    direction: 'credit',
-                    description: `Wallet top-up of \u20b9${addAmount.toLocaleString()}`,
-                    timestamp: new Date().toISOString()
-                });
+            
+            // 2. Log wallet transaction (Separate attempt, don't block balance update)
+            try {
+                if (db) {
+                    await db.ref(`wallet_transactions/${user.id}`).push({
+                        type: 'DEPOSIT',
+                        amount: addAmount,
+                        direction: 'credit',
+                        description: `Wallet top-up of ₹${addAmount.toLocaleString()}`,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            } catch (logErr) {
+                console.warn('[Storage] Transaction logging failed, but balance was updated:', logErr.message);
             }
             const currentUser = { ..._memCache.currentUser, balance: newBalance };
             _setState({ currentUser });
