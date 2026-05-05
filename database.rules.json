@@ -49,7 +49,7 @@
     "wallet_transactions": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
-        ".write": false
+        ".write": "auth != null && $uid === auth.uid"
       }
     },
     "reviews": {

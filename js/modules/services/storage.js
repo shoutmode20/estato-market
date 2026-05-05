@@ -261,6 +261,7 @@ async function _syncToCloud(path, data, type = 'update') {
 // ─── Public Storage API ───────────────────────────────────────────
 export const EstatoStorage = {
     getCurrentUser() { return _memCache.currentUser; },
+    _syncToCloud,
 
     async initDrive(syncCb) {
         _syncCallback = syncCb;
