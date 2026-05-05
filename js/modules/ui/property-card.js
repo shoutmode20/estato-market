@@ -191,6 +191,9 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                 <div class="card-location"><i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}</div>
                 <div class="card-separator"></div>
                 <div class="card-actions">
+                    <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${escapeHtml(prop.id)}" data-title="${escapeHtml(prop.title)}" title="Share Property" aria-label="Share Property">
+                        <i class="ph ph-share-network"></i>
+                    </button>
                     <button class="btn btn-secondary btn-icon shadow-hover pdf-btn" data-id="${escapeHtml(prop.id)}" title="Download Flyer" aria-label="Download Flyer">
                         <i class="ph ph-file-pdf"></i>
                     </button>

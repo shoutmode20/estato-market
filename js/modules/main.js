@@ -3244,6 +3244,9 @@ document.addEventListener('DOMContentLoaded', () => {
             btnHtml = ``;
         } else if (prop.bidding && prop.bidding.enabled) {
             btnHtml = `
+                <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${prop.id}" data-title="${escapeHtml(prop.title)}" title="Share Property">
+                    <i class="ph ph-share-network"></i>
+                </button>
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
                     <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
                 </button>
@@ -3253,6 +3256,9 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         } else {
             btnHtml = `
+                <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${prop.id}" data-title="${escapeHtml(prop.title)}" title="Share Property">
+                    <i class="ph ph-share-network"></i>
+                </button>
                 <button class="btn btn-secondary btn-icon shadow-hover fav-btn ${isFav ? 'active' : ''}" data-id="${prop.id}">
                     <i class="${isFav ? 'ph-fill ph-heart' : 'ph ph-heart'}"></i>
                 </button>
@@ -3281,6 +3287,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 favBtn.classList.toggle('active', isNowFav);
                 favBtn.querySelector('i').className = isNowFav ? 'ph-fill ph-heart' : 'ph ph-heart';
                 renderView(currentView, searchInput.value); // Re-render background grid silently
+            });
+        }
+        
+        const shareBtn = footerBtns.querySelector('.share-btn');
+        if (shareBtn) {
+            shareBtn.addEventListener('click', async (e) => {
+                const id = shareBtn.getAttribute('data-id');
+                const title = shareBtn.getAttribute('data-title');
+                const url = window.location.origin + '/property/' + id;
+                if (navigator.share) {
+                    try {
+                        await navigator.share({ title: 'Estato Property', text: 'Check out this amazing property: ' + title, url: url });
+                    } catch (err) { console.log('Share error:', err); }
+                } else {
+                    navigator.clipboard.writeText(url).then(() => showToast('Link copied to clipboard!', 'success'))
+                    .catch(() => showToast('Failed to copy link.', 'danger'));
+                }
             });
         }
 
@@ -3430,6 +3453,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 const id = e.currentTarget.getAttribute('data-id');
                 const prop = EstatoStorage.getPropertyById(id);
                 if (prop) await generateFlyer(prop);
+            });
+        });
+
+        parent.querySelectorAll('.share-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const id = e.currentTarget.getAttribute('data-id');
+                const title = e.currentTarget.getAttribute('data-title');
+                const url = window.location.origin + '/property/' + id;
+                if (navigator.share) {
+                    try {
+                        await navigator.share({ title: 'Estato Property', text: 'Check out this amazing property: ' + title, url: url });
+                    } catch (err) { console.log('Share error:', err); }
+                } else {
+                    navigator.clipboard.writeText(url).then(() => showToast('Link copied to clipboard!', 'success'))
+                    .catch(() => showToast('Failed to copy link.', 'danger'));
+                }
             });
         });
 
