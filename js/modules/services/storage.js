@@ -599,7 +599,12 @@ export const EstatoStorage = {
     subscribe(callback) {
         if (typeof callback === 'function') {
             _dataChangeListeners.push(callback);
+            // Return an unsubscribe function
+            return () => {
+                _dataChangeListeners = _dataChangeListeners.filter(cb => cb !== callback);
+            };
         }
+        return () => {};
     },
 
     notifyListeners() {

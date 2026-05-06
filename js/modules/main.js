@@ -613,22 +613,91 @@ document.addEventListener('DOMContentLoaded', () => {
             const authCard = loginScreen.querySelector('.auth-card');
             if (authCard) authCard.style.display = 'block';
         } else {
-            // Guest Mode: Revert to Login Screen as background
+            // Guest / Unauthenticated path
             loginScreen.classList.remove('hidden');
             loadingOverlay.classList.add('hidden');
             appContainer.classList.add('hidden');
-            
-            // IF Deep Link: Hide the login card to show the "Brochure" background only
+
+            // --- Brochure Deep-Link Mode ---
             if (window.location.pathname.startsWith('/property/')) {
+                const propId = window.location.pathname.split('/property/')[1];
                 const authCard = loginScreen.querySelector('.auth-card');
                 if (authCard) authCard.style.display = 'none';
+
+                // Show a lightweight loading indicator while Firebase fetches the property
+                loginScreen.insertAdjacentHTML('beforeend', `
+                    <div id="brochureLoadingMsg" style="
+                        position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                        color: white; text-align: center; font-family: inherit; z-index: 9999;">
+                        <div style="width:48px;height:48px;border:4px solid rgba(255,255,255,0.3);
+                             border-top:4px solid white;border-radius:50%;
+                             animation:spin 1s linear infinite;margin:0 auto 1rem;"></div>
+                        <p style="margin:0;font-size:1rem;opacity:0.85;">Loading property...</p>
+                    </div>`);
+
+                // Load public property data, then open the modal when ready
+                EstatoStorage.loadAllData();
+
+                let _guestUnsubscribe = null;
+                let _guestOpened = false;
+
+                const _tryOpenGuestProperty = async () => {
+                    if (_guestOpened) return;
+                    
+                    let p = EstatoStorage.getPropertyById(propId);
+                    
+                    // If not in cache, actively fetch the specific property from Firebase
+                    if (!p) {
+                        try {
+                            const snap = await firebase.database().ref(`properties/${propId}`).once('value');
+                            if (snap.exists()) {
+                                p = snap.val();
+                                p.id = propId; // Ensure ID is attached
+                            }
+                        } catch (err) {
+                            console.error("Direct fetch failed. Firebase rules might block access:", err);
+                        }
+                    }
+
+                    if (!p) return; // Data not yet loaded or doesn't exist
+                    if (!window.openPropertyDetails) return; // Function not yet defined
+
+                    _guestOpened = true;
+                    try {
+                        window.openPropertyDetails(p, true);
+                        const loadMsg = document.getElementById('brochureLoadingMsg');
+                        if (loadMsg) loadMsg.remove();
+                    } catch (e) {
+                        console.error("Brochure error:", e);
+                        const loadMsg = document.getElementById('brochureLoadingMsg');
+                        if (loadMsg) loadMsg.innerHTML = `<p style="color:red;opacity:0.8;">Error loading property: ${e.message}</p>`;
+                    }
+                    if (_guestUnsubscribe) _guestUnsubscribe();
+                };
+
+                // Subscribe to storage updates (fires when Firebase data arrives)
+                EstatoStorage.subscribe(_tryOpenGuestProperty);
+
+                // Poll every 200ms as a safety net for script initialization timing
+                const _guestPollInterval = setInterval(() => {
+                    _tryOpenGuestProperty();
+                    if (_guestOpened) clearInterval(_guestPollInterval);
+                }, 200);
+
+                // Timeout after 10s to show an error
+                setTimeout(() => {
+                    if (!_guestOpened) {
+                        clearInterval(_guestPollInterval);
+                        const loadMsg = document.getElementById('brochureLoadingMsg');
+                        if (loadMsg) loadMsg.innerHTML = `<p style="color:white;opacity:0.8;">Property not found or unavailable.</p><button onclick="location.href='/'" style="margin-top:1rem;padding:0.5rem 1.5rem;border-radius:8px;border:none;background:var(--primary,#ea580c);color:white;cursor:pointer;font-size:1rem;">Go to Estato</button>`;
+                    }
+                }, 10000);
             } else {
+                // Normal login screen for root URL
                 const authCard = loginScreen.querySelector('.auth-card');
                 if (authCard) authCard.style.display = 'block';
+                EstatoStorage.loadAllData();
             }
-
-            // Still load all data so we can resolve deep links
-            EstatoStorage.loadAllData();
         }
 
         if (currentUser) {
@@ -3269,8 +3338,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${prop.id}" data-title="${escapeHtml(prop.title)}" title="Share Property">
                     <i class="ph ph-share-network"></i>
                 </button>
-                <button class="btn btn-primary shadow-hover" onclick="location.reload()" style="flex: 1.5; gap: 0.5rem;">
-                    <i class="ph ph-user"></i> Sign in to Bid or Message
+                <button class="btn btn-primary shadow-hover guest-login-btn" style="flex: 1.5; gap: 0.5rem;">
+                    <i class="ph ph-lock-key"></i> Sign In
                 </button>
             `;
         } else if (prop.bidding && prop.bidding.enabled) {
@@ -3300,6 +3369,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Attach local listeners for dynamic buttons inside modal
         const footerBtns = document.getElementById('detailsActionBtns');
+        
+        const guestLoginBtn = footerBtns.querySelector('.guest-login-btn');
+        if (guestLoginBtn) {
+            guestLoginBtn.addEventListener('click', () => {
+                window.closePropertyDetailsModal();
+                const loginScreen = document.getElementById('loginScreen');
+                if (loginScreen) {
+                    loginScreen.classList.remove('hidden');
+                    const authCard = loginScreen.querySelector('.auth-card');
+                    if (authCard) {
+                        authCard.style.display = 'block';
+                        authCard.style.animation = 'slideUpFade 0.4s ease forwards';
+                    }
+                }
+            });
+        }
         
         const bidBtn = footerBtns.querySelector('.bid-btn');
         if (bidBtn) {
