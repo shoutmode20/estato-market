@@ -1839,26 +1839,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function renderCities() {
         const properties = EstatoStorage.getProperties();
-        const cities = EstatoStorage.getCities();
         
-        let html = `<div class="section-header"><h2>Service Regions</h2></div><div class="grid-layout">`;
+        // Dynamically derive city list from actual properties + defaults
+        const defaultCities = EstatoStorage.getCities() || [];
+        const activeCities = [...new Set(properties.map(p => p.city))].filter(Boolean);
+        const allUniqueCities = [...new Set([...defaultCities, ...activeCities])].sort();
+        
+        let html = `<div class="section-header"><h2>Service Regions</h2><p>Overview of active property markets.</p></div><div class="grid-layout">`;
 
-        if (cities.length === 0) {
+        if (allUniqueCities.length === 0) {
             html += `<div class="empty-state"><p>No regions active yet. Add a property to begin.</p></div>`;
         } else {
-            cities.forEach(city => {
+            allUniqueCities.forEach(city => {
                 const cityProps = properties.filter(p => p.city === city);
-                const count = cityProps.length;
+                const globalCount = cityProps.length;
+                const myCount = cityProps.filter(p => p.ownerId === currentUser.id).length;
                 
-                // Show city cards if Admin OR if Seller has listings in that city
-                const hasListings = currentUser.role === 'Admin' || cityProps.some(p => p.ownerId === currentUser.id);
-                
-                if (hasListings) {
+                // Visible if Admin, OR if there's at least one listing globally
+                if (currentUser.role === 'Admin' || currentUser.role === 'Broker' || globalCount > 0) {
                     html += `
-                        <div class="city-card surface-panel shadow-hover" data-city="${city}">
-                            <i class="ph-duotone ph-buildings"></i>
-                            <h3>${city}</h3>
-                            <p class="badge" style="background: var(--bg-main);">${count} Global Listings</p>
+                        <div class="city-card surface-panel shadow-hover" data-city="${city}" style="position: relative; overflow: hidden;">
+                            <div style="position: absolute; top: 10px; right: 10px; opacity: 0.1; font-size: 3rem; transform: rotate(-15deg);">
+                                <i class="ph ph-map-pin"></i>
+                            </div>
+                            <h3 style="margin-bottom: 0.5rem; color: var(--primary);">${city}</h3>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <span class="badge" style="background: var(--bg-hover); color: var(--text-main); font-size: 0.75rem;">
+                                    ${globalCount} Market Total
+                                </span>
+                                ${myCount > 0 ? `
+                                    <span class="badge" style="background: var(--primary-light); color: var(--primary); font-size: 0.75rem; border: 1px solid var(--primary);">
+                                        ${myCount} My Listings
+                                    </span>
+                                ` : ''}
+                            </div>
                         </div>
                     `;
                 }

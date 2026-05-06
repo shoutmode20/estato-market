@@ -118,7 +118,7 @@ export function renderDashboard(ctx) {
                     </h3>
                     <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Quick overview of your current active portfolio.</p>
                 </div>
-                <button class="btn btn-secondary btn-sm" onclick="window.renderProperties('Properties'); document.getElementById('searchInput').value='${currentUser.id.substring(0,8)}'; document.getElementById('searchInput').dispatchEvent(new Event('input'));">
+                <button class="btn btn-secondary btn-sm" onclick="document.querySelector('[data-view=\\'properties\\']').click(); document.getElementById('searchInput').value='${currentUser.id.substring(0,8)}'; document.getElementById('searchInput').dispatchEvent(new Event('input'));">
                     View All My Listings <i class="ph ph-arrow-right"></i>
                 </button>
             </div>
@@ -279,7 +279,7 @@ export function renderDashboard(ctx) {
                         </div>
                         ${pendingItems.length > 3 ? `
                             <div style="text-align: center; margin-top: 1.5rem;">
-                                <button class="btn btn-secondary shadow-hover" onclick="window.renderProperties('Properties'); document.getElementById('statusSelect').value='Pending'; document.getElementById('statusSelect').dispatchEvent(new Event('change'));">
+                                <button class="btn btn-secondary shadow-hover" onclick="document.querySelector('[data-view=\\'properties\\']').click(); document.getElementById('statusSelect').value='Pending'; document.getElementById('statusSelect').dispatchEvent(new Event('change'));">
                                     View All ${pendingItems.length} Pending Listings <i class="ph ph-arrow-right"></i>
                                 </button>
                             </div>
