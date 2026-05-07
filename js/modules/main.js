@@ -100,6 +100,20 @@ document.addEventListener('DOMContentLoaded', () => {
         _syncCompareIcons();
     };
 
+    window.viewMyListings = function() {
+        if (!currentUser) return;
+        currentFilterCity = null;
+        currentRadiusCenter = null;
+        currentTypeFilter = '';
+        currentStatusFilter = '';
+        currentCategoryFilter = '';
+        
+        setActiveNav('properties');
+        searchInput.value = currentUser.id;
+        renderView('properties', currentUser.id);
+        window.scrollTo(0, 0);
+    };
+
     window.renderComparisonTable = function() {
         if (compareList.length < 2) {
             showToast('Please select at least 2 properties to compare.', 'info');
@@ -1925,7 +1939,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (searchQuery) {
             const keywords = searchQuery.toLowerCase().split(/\s+/).filter(x => x);
             properties = properties.filter(p => {
-                const combinedText = `${p.id} ${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.projectName || ''} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
+                const combinedText = `${p.id} ${p.ownerId || ''} ${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.projectName || ''} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
                 // Smart Match: All keywords must be present in the combined text (Logical AND)
                 return keywords.every(kw => combinedText.includes(kw));
             });

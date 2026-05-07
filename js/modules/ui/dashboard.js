@@ -118,7 +118,7 @@ export function renderDashboard(ctx) {
                     </h3>
                     <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Quick overview of your current active portfolio.</p>
                 </div>
-                <button class="btn btn-secondary btn-sm" onclick="document.querySelector('[data-view=\\'properties\\']').click(); document.getElementById('searchInput').value='${currentUser.id.substring(0,8)}'; document.getElementById('searchInput').dispatchEvent(new Event('input'));">
+                <button class="btn btn-secondary btn-sm" onclick="window.viewMyListings()">
                     View All My Listings <i class="ph ph-arrow-right"></i>
                 </button>
             </div>
