@@ -101,7 +101,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
 
     const rawImgArray = (prop.images && prop.images.length > 0)
         ? prop.images
-        : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        : (prop.image && prop.image.length > 10 ? [prop.image] : [window.ESTATO_DEFAULT_IMG]);
     const images = rawImgArray.map(url => formatImage(url));
 
     const role = currentUser ? currentUser.role : 'Buyer';

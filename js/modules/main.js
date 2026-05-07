@@ -39,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0];
     };
 
-    window.ESTATO_DEFAULT_IMG = 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop';
+    window.ESTATO_DEFAULT_IMG = 'https://placehold.co/800x600/f1f5f9/64748b?text=No+Image+Available';
 
     let dashboardCharts = [];
 
@@ -3242,7 +3242,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('detailsLocation').innerHTML = `<i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}`;
         
         // Images
-        const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : ['https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=800&auto=format&fit=crop']);
+        const rawImgArray = (prop.images && prop.images.length > 0) ? prop.images : (prop.image && prop.image.length > 10 ? [prop.image] : [window.ESTATO_DEFAULT_IMG]);
         const images = rawImgArray.map(url => window.formatEstatoImage(url));
         const imgHtml = `
             <div style="position:relative; width:100%; height:300px; display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:0.5rem; padding-bottom: 0.5rem;">
