@@ -2299,6 +2299,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('bidModal').classList.remove('active');
                 } catch (err) {
                     showToast(err.message, 'danger');
+                } finally {
+                    // Always reset button so user can bid again without reload
                     submitBtn.disabled = false;
                     submitBtn.innerHTML = '<i class="ph ph-gavel"></i> Confirm Bid';
                 }
@@ -2494,6 +2496,16 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('bidModal').classList.add('active');
         updateAllCountdowns();
         renderBidHistory(prop);
+
+        // Always reset submit button state when modal opens to allow repeat bidding
+        const bidForm = document.getElementById('bidForm');
+        if (bidForm) {
+            const submitBtn = bidForm.querySelector('button[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="ph ph-gavel"></i> Confirm Bid';
+            }
+        }
     };
 
     function renderBidHistory(prop) {
