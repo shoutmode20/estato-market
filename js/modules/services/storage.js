@@ -46,7 +46,9 @@ let _memCache = {
 };
 
 let _syncCallback = null;
-let _listenersInitialized = false;  // Guard: prevent stacking duplicate realtime listeners on re-auth
+let _globalListenersActive = false; // Guard: prevent stacking duplicate global listeners
+let _initializedUid = null;        // Track which user the user-specific listeners are for
+let _initializedRole = null;       // Track the role for role-specific listeners
 let _isSubmittingBid = false;       // Local lock to prevent duplicate submissions
 let _dataChangeListeners = [];
 
@@ -404,118 +406,108 @@ export const EstatoStorage = {
     },
 
     async loadAllData() {
-        if (_listenersInitialized) {
-            console.log('[Estato Firebase] Listeners already active — skipping re-init.');
-            if (_syncCallback) _syncCallback('synced');
-            return;
-        }
-        _listenersInitialized = true;
         const uid = _memCache.currentUser ? _memCache.currentUser.id : null;
         const role = _memCache.currentUser ? _memCache.currentUser.role : 'Guest';
-
-        console.log("[Estato Firebase] Initializing Real-time Listeners...");
-        if (!db) return;
         const self = this;
 
-        try {
-            // 1. Latest Properties (real-time, paginated batch)
+        console.log(`[Estato Firebase] loadAllData triggered (UID: ${uid}, Role: ${role})`);
+        if (!db) return;
+
+        // 1. Initialize Global Listeners (Only Once per session)
+        if (!_globalListenersActive) {
+            _globalListenersActive = true;
+            console.log("[Estato Firebase] Initializing Global Real-time Listeners...");
+
+            // Latest Properties
             _trackListener(db.ref('properties').limitToLast(20), (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 self.mergeProperties(latestBatch);
             }, (err) => console.error("[Storage] Property Listener Error:", err.message));
 
-            // 2. User-specific favorites
-            if (uid) {
-                _trackListener(db.ref('favorites/' + uid), (snap) => {
-                    _setState({ favorites: snap.exists() ? (snap.val().ids || []) : [] });
-                }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
-            }
-
-            // 3. Inquiries — Private isolated sync for all users
-            if (uid) {
-                const _inquiryCacheMap = new Map();
-                const updateCache = () => {
-                    const inquiries = Array.from(_inquiryCacheMap.values())
-                        .sort((a,b) => {
-                            const getLatestDate = (inq) => {
-                                if (inq.replies && inq.replies.length > 0) {
-                                    const last = inq.replies[inq.replies.length - 1];
-                                    return new Date(last.date || last.timestamp);
-                                }
-                                return new Date(inq.date || inq.timestamp);
-                            };
-                            return getLatestDate(b) - getLatestDate(a);
-                        });
-                    _setState({ inquiries });
-                };
-
-                console.log(`[Storage] Initializing secure PRIVATE inquiry listener for ${uid}`);
-                _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
-                    if (!snap.exists()) {
-                        _inquiryCacheMap.clear();
-                        updateCache();
-                        return;
-                    }
-                    
-                    const indexedIds = Object.keys(snap.val());
-                    
-                    // Cleanup removed items
-                    for (const inqId of _inquiryCacheMap.keys()) {
-                        if (!indexedIds.includes(inqId)) _inquiryCacheMap.delete(inqId);
-                    }
-
-                    // Attach detail listeners for each indexed thread
-                    indexedIds.forEach(inqId => {
-                        if (!_inquiryCacheMap.has(inqId)) {
-                             _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
-                                if (inqSnap.exists()) {
-                                    _inquiryCacheMap.set(inqId, { id: inqId, ...inqSnap.val() });
-                                } else {
-                                    _inquiryCacheMap.delete(inqId);
-                                }
-                                updateCache();
-                            }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
-                        }
-                    });
-                }, (err) => console.error("[Storage] Inquiry Index Listener Error:", err.message));
-
-                // 6. Legacy Migration (Self-healing for Admins only)
-                // This discovers threads that existed before the index was created.
-                if (role === 'Admin') {
-                    this._performInquiryMigration(uid, role);
-                }
-            }
-
-            // 4. Personal notifications
-            if (uid) {
-                _trackListener(db.ref('notifications/' + uid), (snap) => {
-                    _setState({ notifications: snap.exists() ? (snap.val().items || []) : [] });
-                }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
-            }
-
-            // 5. Platform activity feed (latest 100, admin-read-only in DB rules)
+            // Platform activity feed
             _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
                 _setState({ activities: snap.exists() ? Object.values(snap.val()).reverse() : [] });
             }, (err) => console.error("[Storage] Activity Listener Error:", err.message));
 
-            // 6. Reviews
+            // Reviews
             _trackListener(db.ref('reviews'), (snap) => {
                 _setState({ reviews: snap.exists() ? Object.values(snap.val()) : [] });
             }, (err) => console.error("[Storage] Reviews Listener Error:", err.message));
+        }
 
-            // 7. Admin-Only Users Listener
+        // 2. Initialize User-Specific Listeners (Whenever UID or Role changes)
+        if (uid && (_initializedUid !== uid || _initializedRole !== role)) {
+            console.log(`[Estato Firebase] Initializing User-Specific Listeners for ${uid} (${role})...`);
+            
+            _initializedUid = uid;
+            _initializedRole = role;
+
+            // Favorites
+            _trackListener(db.ref('favorites/' + uid), (snap) => {
+                _setState({ favorites: snap.exists() ? (snap.val().ids || []) : [] });
+            }, (err) => console.error("[Storage] Favorites Listener Error:", err.message));
+
+            // Inquiries — Private isolated sync for all users
+            const _inquiryCacheMap = new Map();
+            const updateCache = () => {
+                const inquiries = Array.from(_inquiryCacheMap.values())
+                    .sort((a,b) => {
+                        const getLatestDate = (inq) => {
+                            if (inq.replies && inq.replies.length > 0) {
+                                const last = inq.replies[inq.replies.length - 1];
+                                return new Date(last.date || last.timestamp);
+                            }
+                            return new Date(inq.date || inq.timestamp);
+                        };
+                        return getLatestDate(b) - getLatestDate(a);
+                    });
+                _setState({ inquiries });
+            };
+
+            _trackListener(db.ref(`user_inquiries/${uid}`), (snap) => {
+                if (!snap.exists()) {
+                    _inquiryCacheMap.clear();
+                    updateCache();
+                    return;
+                }
+                const indexedIds = Object.keys(snap.val());
+                for (const inqId of _inquiryCacheMap.keys()) {
+                    if (!indexedIds.includes(inqId)) _inquiryCacheMap.delete(inqId);
+                }
+                indexedIds.forEach(inqId => {
+                    if (!_inquiryCacheMap.has(inqId)) {
+                        _trackListener(db.ref(`inquiries/${inqId}`), (inqSnap) => {
+                            if (inqSnap.exists()) {
+                                _inquiryCacheMap.set(inqId, { id: inqId, ...inqSnap.val() });
+                            } else {
+                                _inquiryCacheMap.delete(inqId);
+                            }
+                            updateCache();
+                        }, (err) => console.error(`[Storage] Inquiry Detail Listener Error (${inqId}):`, err.message));
+                    }
+                });
+            }, (err) => console.error("[Storage] Inquiry Index Listener Error:", err.message));
+
+            // Personal notifications
+            _trackListener(db.ref('notifications/' + uid), (snap) => {
+                _setState({ notifications: snap.exists() ? (snap.val().items || []) : [] });
+            }, (err) => console.error("[Storage] Notifications Listener Error:", err.message));
+
+            // Admin-Only Users Listener
             if (role === 'Admin') {
                 _trackListener(db.ref('users'), (snap) => {
                     const usersMap = snap.val() || {};
                     const usersList = Object.entries(usersMap).map(([id, u]) => ({ id, ...u }));
                     _setState({ users: usersList });
-                });
-            }
+                }, (err) => console.error("[Storage] Admin Users Listener Error:", err.message));
 
-        } catch (e) {
-            console.error("[Estato Firebase] Failed to initialize listeners", e);
+                // Self-healing migration for Admins
+                this._performInquiryMigration(uid, role);
+            }
         }
+
+        if (_syncCallback) _syncCallback('synced');
     },
 
     /**
@@ -563,7 +555,9 @@ export const EstatoStorage = {
             try { target.off('value', handler); } catch (e) {}
         });
         _listenerHandles = [];
-        _listenersInitialized = false;
+        _globalListenersActive = false;
+        _initializedUid = null;
+        _initializedRole = null;
 
         _setState({ currentUser: null });
         auth.signOut();
