@@ -12,16 +12,16 @@ export function initForms(ctx) {
         if (property) {
             // Editing: always reset to the loaded property
             propertyForm.reset();
-            propImageFile.value = '';
-            imagePreviewContainer.style.display = 'none';
-            propImageHidden.value = '';
+            if (propImageFile) propImageFile.value = '';
+            if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+            if (propImageHidden) propImageHidden.value = '';
         } else {
             // Adding: Only reset if the OLD form was editing a specific property
             if (document.getElementById('propId').value !== '') {
                 propertyForm.reset();
-                propImageFile.value = '';
-                imagePreviewContainer.style.display = 'none';
-                propImageHidden.value = '';
+                if (propImageFile) propImageFile.value = '';
+                if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+                if (propImageHidden) propImageHidden.value = '';
                 document.getElementById('propId').value = '';
             }
         }
@@ -86,8 +86,10 @@ export function initForms(ctx) {
             document.getElementById('propAddress').value = property.address;
             document.getElementById('propDescription').value = property.description || '';
             
-            const imgs = property.images && property.images.length > 0 ? property.images : (property.image ? [property.image] : []);
-            propImageHidden.value = imgs.length > 0 ? JSON.stringify(imgs) : '';
+            const imgs = property.images && Array.isArray(property.images) && property.images.length > 0 
+                ? property.images 
+                : (property.image ? [property.image] : []);
+            if (propImageHidden) propImageHidden.value = imgs.length > 0 ? JSON.stringify(imgs) : '';
             if (window.renderImagePreviews) window.renderImagePreviews();
 
             // Restore location fields
@@ -177,7 +179,8 @@ export function initForms(ctx) {
             category: document.getElementById('propCategory').value === 'Other' 
                 ? (document.getElementById('propCategoryCustom').value.trim() || 'Other') 
                 : document.getElementById('propCategory').value,
-            images: document.getElementById('propImage').value ? JSON.parse(document.getElementById('propImage').value) : []
+            images: (propImageHidden && propImageHidden.value) ? JSON.parse(propImageHidden.value) : [],
+            image: '' // Clear legacy field
         };
 
         // Bidding Logic
@@ -234,11 +237,12 @@ export function initForms(ctx) {
             propertyForm.reset();
             closeModal();
             populateCitiesDatalist();
-            window.setActiveNav('properties'); // Use window if not in scope
-            window.currentFilterCity = null;
-            window.currentSort = 'newest';
-            window.currentTypeFilter = '';
-            window.currentStatusFilter = '';
+            if (typeof window.clearAllFilters === 'function') {
+                window.clearAllFilters();
+            }
+            if (typeof window.setActiveNav === 'function') {
+                window.setActiveNav('properties');
+            }
         } catch(err) {
             console.error('Form submit failed:', err);
             showToast('Error saving listing: ' + err.message, 'danger');

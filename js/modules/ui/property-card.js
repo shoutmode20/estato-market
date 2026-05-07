@@ -4,7 +4,7 @@
  * Extracted from the monolithic main.js for testability and maintainability.
  */
 
-import { escapeHtml } from './utils.js';
+import { escapeHtml, formatIndianPrice, getTimeAgo } from './utils.js';
 
 // Property Category Metadata
 const PROPERTY_METADATA = {
@@ -172,8 +172,8 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                 <div class="card-price">
                     ${prop.bidding && prop.bidding.enabled ? `
                         <span style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Highest Bid</span>
-                        ${formatPrice(prop.highestBid || prop.bidding.basePrice || prop.price)}
-                    ` : formatPrice(prop.price)}
+                        ${formatIndianPrice(prop.highestBid || prop.bidding.basePrice || prop.price)}
+                    ` : formatIndianPrice(prop.price)}
                     <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">${!isSale && !(prop.bidding && prop.bidding.enabled) ? '/ mo' : ''}</span>
                 </div>
                 ${prop.bidding && prop.bidding.enabled && prop.status !== 'Sold' && prop.status !== 'PaymentPending' ? `
@@ -182,6 +182,10 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                         <span class="countdown-timer" data-prop-id="${prop.id}" data-end-time="${prop.bidding.endTime}" data-start-time="${prop.bidding.startTime}">Loading Timer...</span>
                     </div>
                 ` : ''}
+                <div style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.3rem;">
+                    <i class="ph ph-calendar-blank"></i> Listed ${getTimeAgo(prop.listedAt || prop.date || (prop.id && prop.id.includes('_') ? Number(prop.id.split('_')[1]) : null))}
+                </div>
+
                 <div class="card-metrics">
                     <div class="metric"><i class="ph-duotone ph-bed"></i> ${escapeHtml(String(prop.bhk || 'N/A'))}</div>
                     <div class="metric"><i class="ph-duotone ph-ruler"></i> ${prop.area ? Number(prop.area).toLocaleString('en-IN') : '--'} sq.ft</div>

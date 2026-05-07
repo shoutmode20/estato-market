@@ -16,6 +16,7 @@ if (typeof firebase !== 'undefined' && !firebase.apps.length && window.firebaseC
 
 const db = (typeof firebase !== 'undefined') ? firebase.database() : null;
 const auth = (typeof firebase !== 'undefined') ? firebase.auth() : null;
+const storage = (typeof firebase !== 'undefined') ? firebase.storage() : null;
 const provider = (typeof firebase !== 'undefined') ? new firebase.auth.GoogleAuthProvider() : null;
 if (provider) provider.addScope('https://www.googleapis.com/auth/drive.file');
 
@@ -28,7 +29,7 @@ try {
 }
 
 // Store OAuth Credential Memory
-let _driveAccessToken = null;
+let _driveAccessToken = sessionStorage.getItem('estato_drive_token');
 
 // In-memory state cache — single source of truth
 let _memCache = {
@@ -126,7 +127,8 @@ function _can(action, propertyId = null) {
             if (isAdmin) return true;
             if (!(isSeller || isBroker) || !propertyId) return false;
             const prop = _memCache.properties.find(p => p.id === propertyId);
-            return prop && prop.ownerId === user.id;
+            // Allow if owner, OR if the property has no owner (legacy fallback)
+            return prop && (!prop.ownerId || prop.ownerId === user.id);
 
         case 'APPROVE_PROPERTY':
         case 'MANAGE_USERS':
@@ -293,26 +295,28 @@ export const EstatoStorage = {
             if (_syncCallback) _syncCallback('syncing');
             let user = auth.currentUser;
 
-            if (!user) {
-                if (silent) {
-                    await new Promise((resolve, reject) => {
-                        const unsub = auth.onAuthStateChanged(u => {
-                            unsub();
-                            if (u) resolve(u); else reject(new Error('no_session'));
-                        });
+            if (!user && silent) {
+                await new Promise((resolve, reject) => {
+                    const unsub = auth.onAuthStateChanged(u => {
+                        unsub();
+                        if (u) resolve(u); else reject(new Error('no_session'));
                     });
-                    user = auth.currentUser;
-                } else {
-                    const provider = new firebase.auth.GoogleAuthProvider();
-                    const result = await firebase.auth().signInWithPopup(provider);
-                    
-                    // On fresh login, clear old cache to ensure no data mixing
-                    localStorage.removeItem('estato_cache_v12');
-                    
-                    user = result.user;
-                    if (result.credential && result.credential.accessToken) {
-                        _driveAccessToken = result.credential.accessToken;
-                    }
+                });
+                user = auth.currentUser;
+            } else if (!user || !silent) {
+                const provider = new firebase.auth.GoogleAuthProvider();
+                provider.addScope('https://www.googleapis.com/auth/drive.file');
+                
+                const result = await firebase.auth().signInWithPopup(provider);
+                
+                // On fresh login, clear old cache to ensure no data mixing
+                if (!user) localStorage.removeItem('estato_cache_v12');
+                
+                user = result.user;
+                if (result.credential && result.credential.accessToken) {
+                    _driveAccessToken = result.credential.accessToken;
+                    sessionStorage.setItem('estato_drive_token', _driveAccessToken);
+                    console.log("[Storage] Drive Access Token acquired and cached.");
                 }
             }
 
@@ -696,7 +700,16 @@ export const EstatoStorage = {
 
         // 1. memCache + localStorage — immediate
         const properties = [..._memCache.properties];
-        properties[index] = { ...prop, ...updatedProp, priceHistory: prop.priceHistory, ownerId: prop.ownerId, ownerName: prop.ownerName, ownerPicture: prop.ownerPicture, listedAt: prop.listedAt, updatedAt: new Date().toISOString() };
+        properties[index] = { 
+            ...prop, 
+            ...updatedProp, 
+            priceHistory: prop.priceHistory, 
+            ownerId: prop.ownerId || user.id, // Auto-assign if legacy/missing
+            ownerName: prop.ownerName || user.name || 'Estato User', 
+            ownerPicture: prop.ownerPicture || user.picture || null, 
+            listedAt: prop.listedAt || new Date().toISOString(), 
+            updatedAt: new Date().toISOString() 
+        };
         _setState({ properties });
 
         // 2. Cloud — debounced
@@ -1200,7 +1213,37 @@ export const EstatoStorage = {
         _syncToLocal(`recent_v1_${userId}`, recentViews);
     },
 
-    // ── Google Drive Sync ──
+    /**
+     * Upload an image to Firebase Storage (Production Grade)
+     * @param {File|Blob} file 
+     * @returns {Promise<string>} Download URL
+     */
+    async uploadImage(file) {
+        if (!storage) throw new Error("Firebase Storage is not initialized.");
+        const user = _memCache.currentUser;
+        if (!user) throw new Error("Authentication required to upload images.");
+
+        const fileId = Date.now() + '_' + Math.random().toString(36).substring(7);
+        const fileName = file.name || `image_${fileId}.jpg`;
+        const storageRef = storage.ref(`properties/${user.id}/${fileName}`);
+
+        if (_syncCallback) _syncCallback('syncing');
+
+        try {
+            const snapshot = await storageRef.put(file);
+            const downloadUrl = await snapshot.ref.getDownloadURL();
+            
+            if (_syncCallback) _syncCallback('synced');
+            console.log("[Storage] File secured in Firebase Storage:", downloadUrl);
+            return downloadUrl;
+        } catch (e) {
+            console.error("[Storage] Firebase Upload failed:", e);
+            if (_syncCallback) _syncCallback('error');
+            throw new Error("Cloud Storage Failed: " + (e.message || "Unknown error"));
+        }
+    },
+
+    // ── Google Drive Sync (Legacy/Fallback) ──
     async uploadImageToDrive(file) {
         if (!_driveAccessToken) {
             throw new Error("No Google Drive access token. Please re-login to authorize Drive access.");
@@ -1246,7 +1289,7 @@ export const EstatoStorage = {
             const data = await metaRes.json();
 
             // STEP 3: Permissions Update (Public Reader)
-            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+            const permRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
                 method: 'POST',
                 headers: {
                     'Authorization': 'Bearer ' + _driveAccessToken,
@@ -1258,8 +1301,13 @@ export const EstatoStorage = {
                 })
             });
 
-            // Use the Google Drive thumbnail API for direct, guaranteed image rendering in DOM <img> tags
-            return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+            if (!permRes.ok) {
+                console.error("[Drive] Permission update failed:", await permRes.text());
+                throw new Error("Failed to make the image public. Check your Drive permissions.");
+            }
+
+            // Use the high-performance thumbnail proxy (most reliable for direct <img> src)
+            return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1200`;
 
         } catch (e) {
             console.error("[Drive Logic Error]", e);

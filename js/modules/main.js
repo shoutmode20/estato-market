@@ -24,6 +24,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let storageSubscribed = false;   // Guard: prevent duplicate EstatoStorage.subscribe() calls across re-auths
     let countdownInterval = null;
 
+    // --- Global Utility Exposure ---
+    window.setActiveNav = function(view) {
+        const navItems = document.querySelectorAll('.nav-item:not(.title-divider)');
+        navItems.forEach(n => n.classList.remove('active'));
+        const target = document.querySelector(`[data-view="${view}"]`);
+        if (target) target.classList.add('active');
+    };
+
     // Debounce guards: prevent auction functions being called multiple times
     // per second from the 1s timer loop while Firebase write is in-flight.
     const _pendingFinalizations = new Set();
@@ -36,7 +44,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.formatEstatoImage = function(url) {
         if (!url || typeof url !== 'string') return url || '';
-        return url.replace('thumbnail?id=', 'uc?export=view&id=').split('&sz=')[0];
+        // High-performance thumbnail format (Priority)
+        if (url.includes('thumbnail?id=')) return url;
+        // Standard UC format
+        if (url.includes('drive.google.com/uc?id=')) return url;
+        // New robust proxy format
+        if (url.includes('googleusercontent.com')) return url;
+        
+        // Legacy drive links cleanup
+        if (url.includes('drive.google.com')) {
+            const fileId = url.split('id=')[1]?.split('&')[0];
+            if (fileId) return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1200`;
+        }
+        return url;
     };
 
     window.ESTATO_DEFAULT_IMG = 'https://placehold.co/800x600/f1f5f9/64748b?text=No+Image+Available';
@@ -108,10 +128,25 @@ document.addEventListener('DOMContentLoaded', () => {
         currentStatusFilter = '';
         currentCategoryFilter = '';
         
-        setActiveNav('properties');
-        searchInput.value = currentUser.id;
-        renderView('properties', currentUser.id);
+        window.setActiveNav('properties');
+        searchInput.value = 'My Listings';
+        renderView('properties', 'My Listings');
         window.scrollTo(0, 0);
+    };
+
+    window.clearAllFilters = function() {
+        currentFilterCity = null;
+        currentRadiusCenter = null;
+        currentTypeFilter = '';
+        currentStatusFilter = '';
+        currentCategoryFilter = '';
+        currentSort = 'newest';
+        if (searchInput) searchInput.value = '';
+        const radiusLocInput = document.getElementById('radiusLocInput');
+        if (radiusLocInput) radiusLocInput.value = '';
+        
+        renderView('properties');
+        showToast('All filters cleared.', 'info');
     };
 
     window.renderComparisonTable = function() {
@@ -739,7 +774,7 @@ document.addEventListener('DOMContentLoaded', () => {
         applyRBACToDOM();
         
         currentView = currentUser ? ((currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? 'dashboard' : 'properties') : 'properties';
-        setActiveNav(currentView);
+        window.setActiveNav(currentView);
             
             setupAppListeners();
             renderView(currentView);
@@ -933,7 +968,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (view !== 'properties') {
                     currentFilterCity = null;
                 }
-                setActiveNav(view);
+                window.setActiveNav(view);
                 renderView(view);
             });
         });
@@ -942,7 +977,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (currentView === 'properties') {
                 renderProperties(currentFilterCity, query);
             } else if (query) {
-                setActiveNav('properties');
+                window.setActiveNav('properties');
                 renderView('properties', query);
                 searchInput.focus();
             }
@@ -1292,6 +1327,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        function dataURLtoFile(dataurl, filename) {
+            let arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
+                bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
+            while(n--) u8arr[n] = bstr.charCodeAt(n);
+            return new File([u8arr], filename, {type:mime});
+        }
+
         const dropzone = propImageFile.closest('label');
         if (dropzone) {
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -1317,7 +1359,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.renderImagePreviews = function() {
             let links = [];
-            try { if (propImageHidden.value) links = JSON.parse(propImageHidden.value); } catch(e) {}
+            if (!propImageHidden) return;
+            try { if (propImageHidden.value) links = JSON.parse(propImageHidden.value); } catch(e) { console.error("Preview parse error", e); }
             
             imagePreviewContainer.innerHTML = '';
             if (links.length === 0) {
@@ -1373,20 +1416,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const submitBtn = propertyForm.querySelector('[type="submit"]');
             if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> Processing...'; }
             
-            try {
-                for(let file of files) {
-                    const link = await compressImage(file, 1000, 0.7);
-                    existingLinks.push(link);
+            const processFiles = async () => {
+                try {
+                    for(let file of files) {
+                        // Extreme compression for Safe-Mode (600px, 0.5 quality)
+                        // This keeps the file size ~30KB, allowing multiple images in the database.
+                        const compressedBase64 = await compressImage(file, 600, 0.5);
+                        
+                        existingLinks.push(compressedBase64);
+                        propImageHidden.value = JSON.stringify(existingLinks);
+                        window.renderImagePreviews();
+                        showToast(`Processed ${file.name}`, 'info');
+                    }
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
+                    showToast('Images ready for saving.', 'success');
+                } catch(error) {
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
+                    showToast('Processing failed: ' + error.message, 'danger');
                 }
-                propImageHidden.value = JSON.stringify(existingLinks);
-                window.renderImagePreviews();
-                
-                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
-            } catch(error) {
-                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'Save Property'; }
-                showToast('Failed to process image. Details: ' + error.message, 'danger');
-            }
+            };
             
+            await processFiles();
             propImageFile.value = '';
         });
 
@@ -1613,11 +1663,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function setActiveNav(view) {
-        navItems.forEach(n => n.classList.remove('active'));
-        const target = document.querySelector(`[data-view="${view}"]`);
-        if (target) target.classList.add('active');
-    }
 
     // --- Core Rendering Engine ---
     function renderView(viewName, searchQuery = '') {
@@ -1899,7 +1944,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.city-card').forEach(card => {
             card.addEventListener('click', (e) => {
                 currentFilterCity = e.currentTarget.getAttribute('data-city');
-                setActiveNav('properties');
+                window.setActiveNav('properties');
                 renderView('properties');
             });
         });
@@ -1937,12 +1982,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (cityFilter) properties = properties.filter(p => p.city === cityFilter);
         
         if (searchQuery) {
-            const keywords = searchQuery.toLowerCase().split(/\s+/).filter(x => x);
-            properties = properties.filter(p => {
-                const combinedText = `${p.id} ${p.ownerId || ''} ${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.projectName || ''} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
-                // Smart Match: All keywords must be present in the combined text (Logical AND)
-                return keywords.every(kw => combinedText.includes(kw));
-            });
+            const queryLower = searchQuery.toLowerCase();
+            if (queryLower === 'my listings' && currentUser) {
+                properties = properties.filter(p => p.ownerId === currentUser.id);
+            } else {
+                const keywords = queryLower.split(/\s+/).filter(x => x);
+                properties = properties.filter(p => {
+                    const combinedText = `${p.id} ${p.ownerId || ''} ${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.projectName || ''} ${p.description || ''} ${p.bhk || ''}`.toLowerCase();
+                    // Smart Match: All keywords must be present in the combined text (Logical AND)
+                    return keywords.every(kw => combinedText.includes(kw));
+                });
+            }
         }
         
         if (currentTypeFilter) {
@@ -2063,7 +2113,16 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         if (properties.length === 0) {
-            html += `<div class="empty-state" style="grid-column: 1 / -1;"><i class="ph-duotone ph-magnifying-glass"></i><p>No properties found matching criteria.</p></div>`;
+            html += `
+                <div class="empty-state" style="grid-column: 1 / -1; padding: 4rem 2rem;">
+                    <i class="ph-duotone ph-magnifying-glass" style="font-size: 4rem; color: var(--text-muted); opacity: 0.5;"></i>
+                    <h3 style="margin-top: 1.5rem; font-weight: 600;">No properties found</h3>
+                    <p style="color: var(--text-muted); margin-bottom: 2rem;">Try adjusting your filters or location to find more results.</p>
+                    <button class="btn btn-primary shadow-hover" onclick="window.clearAllFilters()">
+                        <i class="ph ph-arrow-counter-clockwise"></i> Clear All Filters
+                    </button>
+                </div>
+            `;
         } else {
             html += properties.map((p, i) => generatePropertyCard(p, i, (currentRadiusCenter && _renderDistanceMap.has(p.id)) ? _renderDistanceMap.get(p.id) : null)).join('');
         }
@@ -4033,8 +4092,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (success) {
             showToast('Re-authorization successful! You can now upload images.', 'success');
             if (imagePreviewContainer) imagePreviewContainer.innerHTML = '';
+            return true;
         } else {
             showToast('Authorization failed. Please ensure popups are allowed for this page.', 'danger');
+            return false;
         }
     };
 
