@@ -45,7 +45,8 @@
                 <i class="ph ph-moon" id="authThemeToggleIcon"></i>
             </button>
             <div class="auth-header">
-                <i class="ph-duotone ph-buildings" style="font-size: 3.5rem; color: var(--primary); margin-bottom: 1.5rem; display: block;"></i>
+                <i class="ph-duotone ph-buildings" id="authLogoIcon" style="font-size: 3.5rem; color: var(--primary); margin-bottom: 0.75rem; display: block; cursor: default; user-select: none; transition: transform 0.15s ease, color 0.15s ease;" title=""></i>
+                <div id="adminUnlockHint" style="font-size: 0.7rem; color: transparent; height: 1rem; margin-bottom: 0.75rem; transition: color 0.4s ease; letter-spacing: 0.08em; font-weight: 600;"></div>
                 <h1>Estato</h1>
                 <p>The Future of Real Estate</p>
             </div>
@@ -68,7 +69,7 @@
                         <span>Broker</span>
                         <small>Manage Portfolios</small>
                     </div>
-                    <div class="role-card" data-role="Admin">
+                    <div class="role-card" data-role="Admin" id="adminRoleCard" style="display:none; opacity:0; transform: scale(0.8); transition: opacity 0.35s ease, transform 0.35s ease;">
                         <i class="ph ph-shield-check"></i>
                         <span>Admin</span>
                         <small>Full Control</small>
@@ -85,6 +86,85 @@
             <p id="loginErrorMsg" class="form-error" style="margin-top: 1.5rem; height: 1.2rem;"></p>
         </div>
     </div>
+
+    <script>
+        (function () {
+            const CLICKS_NEEDED = 5;
+            const RESET_MS = 2000;
+            let clickCount = 0;
+            let resetTimer = null;
+            let unlocked = false;
+
+            const logo = document.getElementById('authLogoIcon');
+            const adminCard = document.getElementById('adminRoleCard');
+            const hint = document.getElementById('adminUnlockHint');
+
+            if (!logo || !adminCard) return;
+
+            function flashLogo() {
+                logo.style.transform = 'scale(1.2)';
+                logo.style.color = '#f97316';
+                setTimeout(() => {
+                    logo.style.transform = 'scale(1)';
+                    logo.style.color = 'var(--primary)';
+                }, 150);
+            }
+
+            function showAdminCard() {
+                if (unlocked && adminCard.style.display === 'flex') return;
+                unlocked = true;
+                adminCard.style.display = 'flex';
+                // Force reflow so transition fires
+                void adminCard.offsetWidth;
+                adminCard.style.opacity = '1';
+                adminCard.style.transform = 'scale(1)';
+                hint.textContent = '🔓 Admin access unlocked';
+                hint.style.color = '#22c55e';
+                setTimeout(() => {
+                    hint.style.color = 'transparent';
+                }, 3000);
+            }
+
+            // Way 1: Secret Clicks
+            logo.addEventListener('click', function () {
+                if (unlocked) return;
+                clickCount++;
+                flashLogo();
+
+                const remaining = CLICKS_NEEDED - clickCount;
+                if (remaining > 0 && clickCount > 1) {
+                    hint.textContent = '●'.repeat(clickCount) + '○'.repeat(remaining);
+                    hint.style.color = '#94a3b8';
+                }
+
+                if (resetTimer) clearTimeout(resetTimer);
+                resetTimer = setTimeout(() => {
+                    clickCount = 0;
+                    hint.textContent = '';
+                    hint.style.color = 'transparent';
+                }, RESET_MS);
+
+                if (clickCount >= CLICKS_NEEDED) {
+                    clearTimeout(resetTimer);
+                    showAdminCard();
+                }
+            });
+
+            // Way 2: URL Parameter (?admin=true)
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('admin') || urlParams.get('mode') === 'admin') {
+                showAdminCard();
+            }
+
+            // Way 3: Keyboard Shortcut (Ctrl + Alt + A)
+            window.addEventListener('keydown', (e) => {
+                if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'a') {
+                    e.preventDefault();
+                    showAdminCard();
+                }
+            });
+        })();
+    </script>
 
     <!-- Data Hydration Loading Overlay -->
     <div id="loadingOverlay" class="auth-overlay hidden" style="background: rgba(253, 251, 247, 0.95); z-index: 2000;">
