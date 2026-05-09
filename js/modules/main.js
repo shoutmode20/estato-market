@@ -144,6 +144,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentStatusFilter = '';
         currentCategoryFilter = '';
         currentSort = 'newest';
+        
+        // Also clear advanced filters if the function is loaded
+        if (typeof window.clearAdvancedFilters === 'function') {
+            window.clearAdvancedFilters(false);
+        }
+        
         if (searchInput) searchInput.value = '';
         const radiusLocInput = document.getElementById('radiusLocInput');
         if (radiusLocInput) radiusLocInput.value = '';
@@ -164,7 +170,15 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Search alert removed.', 'info');
         } else {
             const label = [searchQuery, currentFilterCity, currentTypeFilter].filter(Boolean).join(' · ') || 'All Properties';
-            savedSearches.push({ key, label, savedAt: Date.now(), notifiedIds: [] });
+            // Pre-fill notifiedIds with existing matches so we only alert on NEW properties later
+            const existingMatches = EstatoStorage.getProperties().filter(p => p.status === 'Available').filter(p => {
+                const text = `${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.description || ''}`.toLowerCase();
+                return (!searchQuery || text.includes(searchQuery.toLowerCase()))
+                    && (!currentFilterCity || p.city === currentFilterCity)
+                    && (!currentTypeFilter || p.type === currentTypeFilter);
+            }).map(p => p.id);
+            
+            savedSearches.push({ key, label, savedAt: Date.now(), notifiedIds: existingMatches });
             localStorage.setItem('estato_saved_searches', JSON.stringify(savedSearches));
             showToast(`🔔 Alert saved for "${label}". You'll be notified when new matches arrive.`, 'success');
         }
@@ -881,6 +895,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         renderNotifications();
                         updateSidebarBadges();
                     }
+                    
+                    // Check for newly matched saved searches after data sync
+                    checkSavedSearchAlerts();
                     
                     // History API Routing: Open property if URL path is /property/:id
                     if (window.location.pathname.startsWith('/property/')) {
@@ -2027,12 +2044,14 @@ document.addEventListener('DOMContentLoaded', () => {
         renderView('properties', searchInput.value);
     };
 
-    window.clearAdvancedFilters = () => {
+    window.clearAdvancedFilters = (doRender = true) => {
         document.querySelectorAll('.filter-amenity').forEach(cb => cb.checked = false);
-        document.getElementById('filterPriceMin').value = '';
-        document.getElementById('filterPriceMax').value = '';
+        const minInput = document.getElementById('filterPriceMin');
+        const maxInput = document.getElementById('filterPriceMax');
+        if (minInput) minInput.value = '';
+        if (maxInput) maxInput.value = '';
         advancedFilters = { amenities: [], priceMin: null, priceMax: null };
-        renderView('properties', searchInput.value);
+        if (doRender) renderView('properties', searchInput ? searchInput.value : '');
     };
 
     function renderProperties(cityFilter = null, searchQuery = '') {
@@ -2928,7 +2947,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </div>
                             </div>`;
                         }).join('')}
-                        ${myProps.length > 5 ? `<div style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:0.5rem;">+ ${myProps.length - 5} more listings</div>` : ''}
+                        ${myProps.length > 5 ? `<div style="font-size:0.85rem; color:var(--primary); text-align:center; padding:0.75rem; cursor:pointer; font-weight:600; border-radius:var(--radius-sm); transition:background 0.2s;" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'" onclick="window.viewMyListings()">+ ${myProps.length - 5} more listings. Click to view all.</div>` : ''}
                     </div>` : `<p style="color:var(--text-muted); font-size:0.9rem;">No listings yet. Add your first property to see analytics.</p>`}
                 </div>
             `;

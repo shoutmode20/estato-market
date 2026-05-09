@@ -254,6 +254,7 @@ export function initForms(ctx) {
         } catch(err) {
             console.error('Form submit failed:', err);
             showToast('Error saving listing: ' + err.message, 'danger');
+        } finally {
             if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origBtnHtml; }
         }
     }
