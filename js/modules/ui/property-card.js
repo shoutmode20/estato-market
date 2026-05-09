@@ -193,6 +193,15 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                 <div class="card-title">${escapeHtml(prop.title)}</div>
                 ${prop.projectName ? `<div style="font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 0.25rem;"><i class="ph ph-buildings"></i> ${escapeHtml(prop.projectName)}</div>` : ''}
                 <div class="card-location"><i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}</div>
+                ${prop.amenities && prop.amenities.length > 0 ? `
+                <div class="amenity-pills" style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0;">
+                    ${prop.amenities.slice(0, 3).map(a => {
+                        const icons = { Furnished: 'ph-couch', Pool: 'ph-waves', Gym: 'ph-barbell', Parking: 'ph-car', Security: 'ph-shield-check', PetFriendly: 'ph-paw-print' };
+                        const labels = { Furnished: 'Furnished', Pool: 'Pool', Gym: 'Gym', Parking: 'Parking', Security: 'Security', PetFriendly: 'Pet OK' };
+                        return `<span style="font-size:0.7rem; padding: 0.2rem 0.5rem; background: var(--bg-hover); border: 1px solid var(--border-color); border-radius: 20px; display: flex; align-items: center; gap: 0.25rem; color: var(--text-muted);"><i class="ph ${icons[a] || 'ph-check'}"></i>${labels[a] || a}</span>`;
+                    }).join('')}
+                    ${prop.amenities.length > 3 ? `<span style="font-size:0.7rem; padding: 0.2rem 0.5rem; background: var(--bg-hover); border: 1px solid var(--border-color); border-radius: 20px; color: var(--text-muted);">+${prop.amenities.length - 3} more</span>` : ''}
+                </div>` : ''}
                 <div class="card-separator"></div>
                 <div class="card-actions">
                     <button class="btn btn-secondary btn-icon shadow-hover share-btn" data-id="${escapeHtml(prop.id)}" data-title="${escapeHtml(prop.title)}" title="Share Property" aria-label="Share Property">

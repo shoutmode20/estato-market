@@ -120,6 +120,9 @@ document.addEventListener('DOMContentLoaded', () => {
         _syncCompareIcons();
     };
 
+    window.showToast = showToast;
+    window.showConfirm = showConfirm;
+
     window.viewMyListings = function() {
         if (!currentUser) return;
         currentFilterCity = null;
@@ -148,6 +151,51 @@ document.addEventListener('DOMContentLoaded', () => {
         renderView('properties');
         showToast('All filters cleared.', 'info');
     };
+
+    // ── Saved Search Alerts ──────────────────────────────────────────────────
+    window.toggleSaveSearch = function() {
+        const searchQuery    = searchInput ? searchInput.value : '';
+        const savedSearches  = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        const key = JSON.stringify({ q: searchQuery || '', city: currentFilterCity || '', type: currentTypeFilter || '' });
+        const idx = savedSearches.findIndex(s => s.key === key);
+        if (idx > -1) {
+            savedSearches.splice(idx, 1);
+            localStorage.setItem('estato_saved_searches', JSON.stringify(savedSearches));
+            showToast('Search alert removed.', 'info');
+        } else {
+            const label = [searchQuery, currentFilterCity, currentTypeFilter].filter(Boolean).join(' · ') || 'All Properties';
+            savedSearches.push({ key, label, savedAt: Date.now(), notifiedIds: [] });
+            localStorage.setItem('estato_saved_searches', JSON.stringify(savedSearches));
+            showToast(`🔔 Alert saved for "${label}". You'll be notified when new matches arrive.`, 'success');
+        }
+        // Re-render to update button state
+        renderView('properties', searchInput ? searchInput.value : '');
+    };
+
+    function checkSavedSearchAlerts() {
+        if (!currentUser) return;
+        const savedSearches = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        if (!savedSearches.length) return;
+        const allProps = EstatoStorage.getProperties().filter(p => p.status === 'Available');
+        let updated = false;
+        savedSearches.forEach(ss => {
+            const { q, city, type } = JSON.parse(ss.key);
+            const matches = allProps.filter(p => {
+                const text = `${p.title} ${p.city} ${p.address} ${p.pinCode || ''} ${p.description || ''}`.toLowerCase();
+                return (!q || text.includes(q.toLowerCase()))
+                    && (!city || p.city === city)
+                    && (!type || p.type === type);
+            });
+            const newMatches = matches.filter(p => !(ss.notifiedIds || []).includes(p.id));
+            if (newMatches.length > 0) {
+                showToast(`🔔 ${newMatches.length} new match${newMatches.length > 1 ? 'es' : ''} for your saved search "${ss.label}"!`, 'success');
+                ss.notifiedIds = [...(ss.notifiedIds || []), ...newMatches.map(p => p.id)];
+                updated = true;
+            }
+        });
+        if (updated) localStorage.setItem('estato_saved_searches', JSON.stringify(savedSearches));
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     window.renderComparisonTable = function() {
         if (compareList.length < 2) {
@@ -780,6 +828,8 @@ document.addEventListener('DOMContentLoaded', () => {
             renderView(currentView);
             renderNotifications();
             if (formApi && typeof formApi.populateCitiesDatalist === 'function') formApi.populateCitiesDatalist();
+            // Check for new matching properties against any saved search alerts (delayed so data loads first)
+            setTimeout(() => checkSavedSearchAlerts(), 2000);
 
             // Start Reliable Real-time Countdown Timers
             if (countdownInterval) clearInterval(countdownInterval);
@@ -1968,6 +2018,23 @@ document.addEventListener('DOMContentLoaded', () => {
         attachCardListeners();
     }
 
+    let advancedFilters = { amenities: [], priceMin: null, priceMax: null };
+
+    window.applyAdvancedFilters = () => {
+        advancedFilters.amenities = Array.from(document.querySelectorAll('.filter-amenity:checked')).map(cb => cb.value);
+        advancedFilters.priceMin = document.getElementById('filterPriceMin').value ? Number(document.getElementById('filterPriceMin').value) : null;
+        advancedFilters.priceMax = document.getElementById('filterPriceMax').value ? Number(document.getElementById('filterPriceMax').value) : null;
+        renderView('properties', searchInput.value);
+    };
+
+    window.clearAdvancedFilters = () => {
+        document.querySelectorAll('.filter-amenity').forEach(cb => cb.checked = false);
+        document.getElementById('filterPriceMin').value = '';
+        document.getElementById('filterPriceMax').value = '';
+        advancedFilters = { amenities: [], priceMin: null, priceMax: null };
+        renderView('properties', searchInput.value);
+    };
+
     function renderProperties(cityFilter = null, searchQuery = '') {
         let properties = EstatoStorage.getProperties();
 
@@ -1993,6 +2060,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     return keywords.every(kw => combinedText.includes(kw));
                 });
             }
+        }
+        
+        // Advanced Filters
+        if (advancedFilters.priceMin !== null) properties = properties.filter(p => p.price >= advancedFilters.priceMin);
+        if (advancedFilters.priceMax !== null) properties = properties.filter(p => p.price <= advancedFilters.priceMax);
+        if (advancedFilters.amenities && advancedFilters.amenities.length > 0) {
+            properties = properties.filter(p => {
+                if (!p.amenities) return false;
+                return advancedFilters.amenities.every(amenity => p.amenities.includes(amenity));
+            });
         }
         
         if (currentTypeFilter) {
@@ -2056,14 +2133,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         let headerText = cityFilter ? `Listings in ${cityFilter}` : 'All Featured Listings';
+        if (searchQuery && searchQuery !== 'My Listings') headerText = `Results for "${searchQuery}"`;
+
+        // Saved Search: show banner when an active search/filter exists
+        const hasActiveSearch = !!(searchQuery || cityFilter || currentTypeFilter);
+        const savedSearches = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        const currentSearchKey = JSON.stringify({ q: searchQuery || '', city: cityFilter || '', type: currentTypeFilter || '' });
+        const alreadySaved = savedSearches.some(s => s.key === currentSearchKey);
 
         let html = `
             ${(!cityFilter && !searchQuery && !currentRadiusCenter && !currentTypeFilter && !currentStatusFilter && !currentCategoryFilter) ? renderRecentlyViewed() : ''}
             <div class="section-header" style="flex-direction: column; align-items: flex-start;">
-                <h2>${headerText} 
-                    ${cityFilter ? `<button class="btn btn-secondary btn-sm" id="clearCityFilterBtn" style="margin-left: 1rem; padding: 0.25rem 0.75rem;"><i class="ph ph-x"></i> Clear Region</button>` : ''}
-                </h2>
-                
+                <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:0.5rem;">
+                    <h2 style="margin:0;">${headerText}
+                        ${cityFilter ? `<button class="btn btn-secondary btn-sm" id="clearCityFilterBtn" style="margin-left: 1rem; padding: 0.25rem 0.75rem;"><i class="ph ph-x"></i> Clear Region</button>` : ''}
+                    </h2>
+                    ${hasActiveSearch && currentUser ? `
+                    <button id="saveSearchBtn" class="btn btn-sm shadow-hover" style="background:${alreadySaved ? 'var(--bg-hover)' : 'var(--primary)'}; color:${alreadySaved ? 'var(--text-muted)' : 'white'}; font-size:0.8rem; white-space:nowrap;" onclick="window.toggleSaveSearch()">
+                        <i class="ph ph-${alreadySaved ? 'bell-slash' : 'bell'}"></i>
+                        ${alreadySaved ? 'Remove Alert' : 'Save Search & Get Alerts'}
+                    </button>` : ''}
+                </div>
                 <div class="filters-toolbar">
                     <select id="sortSelect">
                         ${FILTER_CONFIG.sortOptions.map(opt => `<option value="${opt.value}" ${currentSort === opt.value ? 'selected' : ''}>Sort: ${opt.label}</option>`).join('')}
@@ -2790,6 +2880,59 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         
         if (currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') {
+            const allProps = EstatoStorage.getProperties();
+            const myProps = allProps.filter(p => p.ownerId === currentUser.id);
+            const allInquiries = EstatoStorage.getInquiries ? EstatoStorage.getInquiries() : [];
+            const myInquiries = allInquiries.filter(inq => inq.ownerId === currentUser.id || myProps.some(p => p.id === inq.propertyId));
+            const totalViews = myProps.reduce((sum, p) => sum + (p.views || 0), 0);
+            const totalInq = myInquiries.length;
+            const activeListings = myProps.filter(p => p.status === 'Available').length;
+            const pendingListings = myProps.filter(p => p.status === 'Pending').length;
+
+            html += `
+                <div class="settings-card surface-panel" style="margin-top: 2rem;">
+                    <h3 style="margin-bottom: 1.5rem; display:flex; align-items:center; gap:0.5rem;"><i class="ph-duotone ph-chart-bar" style="color:var(--primary);"></i> My Listing Analytics</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                        <div style="background:var(--bg-main); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:1rem; text-align:center;">
+                            <div style="font-size:2rem; font-weight:800; color:var(--primary);">${myProps.length}</div>
+                            <div style="font-size:0.8rem; color:var(--text-muted);">Total Listings</div>
+                        </div>
+                        <div style="background:var(--bg-main); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:1rem; text-align:center;">
+                            <div style="font-size:2rem; font-weight:800; color:#10b981;">${activeListings}</div>
+                            <div style="font-size:0.8rem; color:var(--text-muted);">Active</div>
+                        </div>
+                        <div style="background:var(--bg-main); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:1rem; text-align:center;">
+                            <div style="font-size:2rem; font-weight:800; color:#f59e0b;">${pendingListings}</div>
+                            <div style="font-size:0.8rem; color:var(--text-muted);">Pending Review</div>
+                        </div>
+                        <div style="background:var(--bg-main); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:1rem; text-align:center;">
+                            <div style="font-size:2rem; font-weight:800; color:#6366f1;">${totalInq}</div>
+                            <div style="font-size:0.8rem; color:var(--text-muted);">Total Inquiries</div>
+                        </div>
+                    </div>
+                    ${myProps.length > 0 ? `
+                    <h4 style="font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:0.75rem;">Per-Listing Breakdown</h4>
+                    <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                        ${myProps.slice(0, 5).map(p => {
+                            const propInq = myInquiries.filter(inq => inq.propertyId === p.id).length;
+                            const statusColor = p.status === 'Available' ? '#10b981' : p.status === 'Pending' ? '#f59e0b' : '#6b7280';
+                            return `
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:0.75rem 1rem; background:var(--bg-main); border-radius:var(--radius-sm); border:1px solid var(--border-color);">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="font-weight:600; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(p.title)}</div>
+                                    <div style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(p.city)}</div>
+                                </div>
+                                <div style="display:flex; gap:1rem; align-items:center; flex-shrink:0;">
+                                    <span style="font-size:0.75rem; color:var(--text-muted);"><i class="ph ph-envelope-simple"></i> ${propInq} inquiries</span>
+                                    <span style="font-size:0.75rem; padding:0.2rem 0.5rem; border-radius:20px; background:${statusColor}20; color:${statusColor}; font-weight:600;">${p.status}</span>
+                                </div>
+                            </div>`;
+                        }).join('')}
+                        ${myProps.length > 5 ? `<div style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:0.5rem;">+ ${myProps.length - 5} more listings</div>` : ''}
+                    </div>` : `<p style="color:var(--text-muted); font-size:0.9rem;">No listings yet. Add your first property to see analytics.</p>`}
+                </div>
+            `;
+
             html += `
                 <div class="settings-card surface-panel" style="margin-top: 2rem;">
                     <h3>Drive Data Export</h3>
@@ -3293,6 +3436,24 @@ document.addEventListener('DOMContentLoaded', () => {
         window.history.pushState({}, '', '/');
     };
 
+    window.calculateEMI = () => {
+        const price = parseFloat(document.getElementById('calcPrice').value) || 0;
+        const downPayment = parseFloat(document.getElementById('calcDownPayment').value) || 0;
+        const rate = parseFloat(document.getElementById('calcInterestRate').value) || 0;
+        const years = parseFloat(document.getElementById('calcTenure').value) || 0;
+        
+        const principal = price - downPayment;
+        const monthlyRate = rate / 12 / 100;
+        const months = years * 12;
+        
+        let emi = 0;
+        if (principal > 0 && monthlyRate > 0 && months > 0) {
+            emi = principal * monthlyRate * Math.pow(1 + monthlyRate, months) / (Math.pow(1 + monthlyRate, months) - 1);
+        }
+        
+        document.getElementById('calcEmiResult').innerHTML = `${currencyFormatter.format(emi)} <span style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">/ month</span>`;
+    };
+
     window.openPropertyDetails = (prop, skipPushState = false) => {
         if (!skipPushState) {
             window.history.pushState({ propId: prop.id }, '', '/property/' + prop.id);
@@ -3342,6 +3503,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Description
         document.getElementById('detailsDescription').textContent = prop.description || 'No description provided for this listing.';
+
+        // Amenities block (injected dynamically after description)
+        let amenitiesSection = document.getElementById('detailsAmenitiesSection');
+        if (!amenitiesSection) {
+            amenitiesSection = document.createElement('div');
+            amenitiesSection.id = 'detailsAmenitiesSection';
+            document.getElementById('detailsDescription').parentElement.after(amenitiesSection);
+        }
+        if (prop.amenities && prop.amenities.length > 0) {
+            const amenityMap = {
+                Furnished:  { icon: 'ph-couch',        label: 'Furnished' },
+                Pool:       { icon: 'ph-waves',         label: 'Swimming Pool' },
+                Gym:        { icon: 'ph-barbell',       label: 'Gymnasium' },
+                Parking:    { icon: 'ph-car',           label: 'Reserved Parking' },
+                Security:   { icon: 'ph-shield-check',  label: '24/7 Security' },
+                PetFriendly:{ icon: 'ph-paw-print',     label: 'Pet Friendly' }
+            };
+            amenitiesSection.innerHTML = `
+                <div style="margin-bottom: 2rem;">
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Amenities & Features</h4>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+                        ${prop.amenities.map(a => {
+                            const m = amenityMap[a] || { icon: 'ph-check-circle', label: a };
+                            return `<span style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 1rem; background:var(--bg-hover); border:1px solid var(--border-color); border-radius:var(--radius-sm); font-size:0.9rem; font-weight:500;"><i class="ph ${m.icon}" style="color:var(--primary);"></i>${m.label}</span>`;
+                        }).join('')}
+                    </div>
+                </div>`;
+        } else {
+            amenitiesSection.innerHTML = '';
+        }
 
         // Ratings
         const reviews = EstatoStorage.getReviewsByProperty(prop.id);
@@ -3420,6 +3611,14 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         } else {
             document.getElementById('detailsPrice').innerHTML = `${currencyFormatter.format(prop.price)} <span style="font-size:1rem; color:var(--text-muted); font-weight:500;">${prop.type === 'Rent' ? '/ mo' : ''}</span>`;
+        }
+        
+        // Populate Calculator
+        const calcPriceEl = document.getElementById('calcPrice');
+        if (calcPriceEl) {
+            calcPriceEl.value = prop.price || 0;
+            document.getElementById('calcDownPayment').value = (prop.price || 0) * 0.2; // 20% default down payment
+            if (window.calculateEMI) window.calculateEMI();
         }
         
         const role = currentUser ? currentUser.role : 'Buyer';
@@ -3522,13 +3721,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 const id = shareBtn.getAttribute('data-id');
                 const title = shareBtn.getAttribute('data-title');
                 const url = window.location.origin + '/property/' + id;
+                const msg = `Check out this property on Estato: ${title}\n${url}`;
                 if (navigator.share) {
                     try {
-                        await navigator.share({ title: 'Estato Property', text: 'Check out this amazing property: ' + title, url: url });
-                    } catch (err) { console.log('Share error:', err); }
+                        await navigator.share({ title: 'Estato Property', text: msg, url });
+                    } catch (err) { /* cancelled */ }
                 } else {
-                    navigator.clipboard.writeText(url).then(() => showToast('Link copied to clipboard!', 'success'))
-                    .catch(() => showToast('Failed to copy link.', 'danger'));
+                    // Show mini share menu
+                    const existing = document.getElementById('sharePopover');
+                    if (existing) existing.remove();
+                    const pop = document.createElement('div');
+                    pop.id = 'sharePopover';
+                    pop.style.cssText = 'position:fixed;bottom:5rem;right:2rem;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:1rem;z-index:9999;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:0.75rem;min-width:200px;';
+                    pop.innerHTML = `
+                        <strong style="font-size:0.85rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;">Share via</strong>
+                        <a href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:var(--text-main);font-weight:600;"><i class="ph ph-whatsapp-logo" style="font-size:1.4rem;color:#25D366;"></i>WhatsApp</a>
+                        <a href="mailto:?subject=${encodeURIComponent('Property on Estato: ' + title)}&body=${encodeURIComponent(msg)}" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:var(--text-main);font-weight:600;"><i class="ph ph-envelope" style="font-size:1.4rem;color:var(--primary);"></i>Email</a>
+                        <button onclick="navigator.clipboard.writeText('${url}').then(()=>window.showToast('Link copied!','success'));document.getElementById('sharePopover').remove();" style="display:flex;align-items:center;gap:0.75rem;background:none;border:none;cursor:pointer;font-weight:600;color:var(--text-main);padding:0;"><i class="ph ph-link" style="font-size:1.4rem;color:var(--text-muted);"></i>Copy Link</button>
+                        <button onclick="document.getElementById('sharePopover').remove()" style="font-size:0.8rem;background:none;border:none;cursor:pointer;color:var(--text-muted);text-align:right;">✕ Close</button>
+                    `;
+                    document.body.appendChild(pop);
                 }
             });
         }

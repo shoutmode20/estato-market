@@ -23,6 +23,7 @@ export function initForms(ctx) {
                 if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
                 if (propImageHidden) propImageHidden.value = '';
                 document.getElementById('propId').value = '';
+                document.querySelectorAll('input[name="propAmenity"]').forEach(cb => cb.checked = false);
             }
         }
 
@@ -112,11 +113,17 @@ export function initForms(ctx) {
 
             const gLink = document.getElementById('propGoogleMapsLink');
             if (gLink) gLink.value = '';
+            
+            // Restore amenities
+            document.querySelectorAll('input[name="propAmenity"]').forEach(cb => {
+                cb.checked = property.amenities && property.amenities.includes(cb.value);
+            });
         } else {
             modalTitle.textContent = 'Publish New Listing';
             document.getElementById('propId').value = '';
             document.getElementById('propBiddingEnabled').checked = false;
             document.getElementById('biddingFields').style.display = 'none';
+            document.querySelectorAll('input[name="propAmenity"]').forEach(cb => cb.checked = false);
         }
 
         // Always scroll modal body back to top so Title + Image fields are visible
@@ -180,7 +187,8 @@ export function initForms(ctx) {
                 ? (document.getElementById('propCategoryCustom').value.trim() || 'Other') 
                 : document.getElementById('propCategory').value,
             images: (propImageHidden && propImageHidden.value) ? JSON.parse(propImageHidden.value) : [],
-            image: '' // Clear legacy field
+            image: '', // Clear legacy field
+            amenities: Array.from(document.querySelectorAll('input[name="propAmenity"]:checked')).map(cb => cb.value)
         };
 
         // Bidding Logic
