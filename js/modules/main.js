@@ -3,7 +3,8 @@ import { escapeHtml, showToast, showConfirm, debounce } from './ui/utils.js';
 import { State, updateState } from './core/state.js';
 import {
     initMap, destroyMap, updateMapMarkers, toggleMapView, getIsMapVisible,
-    initModalMap, updateModalMarker, destroyModalMap, reverseGeocode, CITY_COORDS
+    initModalMap, updateModalMarker, destroyModalMap, reverseGeocode, CITY_COORDS,
+    initDetailsMap
 } from './ui/map-engine.js';
 import {
     generatePropertyCard as coreGenerateCard, sortProperties, filterByRole, applyFilters,
@@ -12,6 +13,7 @@ import {
 import { renderDashboard as externalRenderDashboard } from './ui/dashboard.js';
 import { renderMessages as externalRenderMessages } from './ui/messaging.js';
 import { renderAuctions as externalRenderAuctions } from './ui/auctions.js';
+import { renderCRM as externalRenderCRM } from './ui/crm.js';
 import { initForms } from './ui/forms.js';
 
 /* Estato V12.1 - Production - SEO & Pagination Enabled */
@@ -202,13 +204,50 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const newMatches = matches.filter(p => !(ss.notifiedIds || []).includes(p.id));
             if (newMatches.length > 0) {
-                showToast(`🔔 ${newMatches.length} new match${newMatches.length > 1 ? 'es' : ''} for your saved search "${ss.label}"!`, 'success');
+                const msg = `🔔 ${newMatches.length} new match${newMatches.length > 1 ? 'es' : ''} for your saved search "${ss.label}"!`;
+                showToast(msg, 'success');
+                // Make it persistent in the notification center
+                newMatches.forEach(p => {
+                    EstatoStorage.addNotification(`Matching property found: ${p.title} in ${p.city}`, 'saved_search_match', { id: p.id });
+                });
                 ss.notifiedIds = [...(ss.notifiedIds || []), ...newMatches.map(p => p.id)];
                 updated = true;
             }
         });
         if (updated) localStorage.setItem('estato_saved_searches', JSON.stringify(savedSearches));
     }
+
+    window.applySavedSearch = function(idx) {
+        const searches = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        const s = searches[idx];
+        if (!s) return;
+        const { q, city, type } = JSON.parse(s.key);
+        
+        if (searchInput) searchInput.value = q || '';
+        currentFilterCity = city || null;
+        currentTypeFilter = type || '';
+        
+        renderView('properties', q || '');
+        showToast(`Applied search: ${s.label}`, 'info');
+    };
+
+    window.deleteSavedSearch = function(idx) {
+        const searches = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        if (idx > -1) {
+            searches.splice(idx, 1);
+            localStorage.setItem('estato_saved_searches', JSON.stringify(searches));
+            showToast('Search alert deleted.', 'info');
+            if (currentView === 'dashboard') renderView('dashboard');
+        }
+    };
+
+    window.clearAllSavedSearches = function() {
+        showConfirm('Are you sure you want to delete all saved search alerts?', () => {
+            localStorage.removeItem('estato_saved_searches');
+            showToast('All search alerts cleared.', 'info');
+            if (currentView === 'dashboard') renderView('dashboard');
+        });
+    };
     // ────────────────────────────────────────────────────────────────────────
 
     window.renderComparisonTable = function() {
@@ -900,7 +939,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     checkSavedSearchAlerts();
                     
                     // History API Routing: Open property if URL path is /property/:id
-                    if (window.location.pathname.startsWith('/property/')) {
+                    // Guard: Only open if no modal is currently active to prevent constant reloading on sync
+                    if (!anyModalOpen && window.location.pathname.startsWith('/property/')) {
                         const pathParts = window.location.pathname.split('/property/');
                         if (pathParts.length > 1 && pathParts[1]) {
                             const p = EstatoStorage.getPropertyById(pathParts[1]);
@@ -1765,6 +1805,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'dashboard': renderDashboard(); break;
             case 'cities': renderCities(); break;
             case 'messages': renderMessages(); break;
+            case 'crm': externalRenderCRM(viewContainer); break;
             case 'properties': renderProperties(currentFilterCity, searchQuery); break;
             case 'watchlist': renderSavedProperties(); break;
             case 'auctions': renderAuctions(); break;
@@ -2016,6 +2057,21 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+
+    window.verifyPropertyListing = async (id, event) => {
+        if (event) event.stopPropagation();
+        try {
+            const success = await EstatoStorage.verifyProperty(id);
+            if (success) {
+                showToast('Property verified successfully!', 'success');
+                // The modal content will re-render if we reopen it, 
+                // but since data synced, closing it is safest.
+                document.getElementById('propertyDetailsModal').classList.remove('active');
+            }
+        } catch (err) {
+            showToast(err.message, 'danger');
+        }
+    };
 
     function renderSavedProperties() {
         let properties = EstatoStorage.getProperties();
@@ -3013,10 +3069,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderMessages() {
-        const viewContainer = document.getElementById('viewContainer');
-        externalRenderMessages({ currentUser, EstatoStorage, viewContainer });
+    function renderMessages(targetInquiryId = null) {
+        externalRenderMessages({
+            currentUser,
+            EstatoStorage,
+            viewContainer
+        }, targetInquiryId);
     }
+
+    window.openInquiryChat = function(id) {
+        currentView = 'messages';
+        window.setActiveNav('messages');
+        renderMessages(id);
+    };
 
 
     window.openReviewModal = (id) => {
@@ -3470,13 +3535,64 @@ document.addEventListener('DOMContentLoaded', () => {
             emi = principal * monthlyRate * Math.pow(1 + monthlyRate, months) / (Math.pow(1 + monthlyRate, months) - 1);
         }
         
-        document.getElementById('calcEmiResult').innerHTML = `${currencyFormatter.format(emi)} <span style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">/ month</span>`;
+        const resEl = document.getElementById('calcEmiResult');
+        if (resEl) resEl.textContent = currencyFormatter.format(emi);
+    };
+
+    window.calculateROI = () => {
+        const price = parseFloat(document.getElementById('roiInvestment').value) || 0;
+        const rent = parseFloat(document.getElementById('roiRent').value) || 0;
+        const maint = parseFloat(document.getElementById('roiMaint').value) || 0;
+        const tax = parseFloat(document.getElementById('roiTax').value) || 0;
+
+        if (price > 0 && rent > 0) {
+            const annualRent = rent * 12;
+            const grossYield = (annualRent / price) * 100;
+            const netAnnual = annualRent - (maint * 12) - tax;
+            const netYield = (netAnnual / price) * 100;
+
+            document.getElementById('roiResult').innerHTML = `
+                ${grossYield.toFixed(2)}% <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">(Gross)</span>
+                <div style="font-size: 0.8rem; color: #059669; font-weight: 600; margin-top: 2px;">
+                    ${netYield.toFixed(2)}% <span style="color: var(--text-muted); font-weight: 500;">Net Yield</span>
+                </div>
+            `;
+        } else {
+            document.getElementById('roiResult').textContent = '0%';
+        }
     };
 
     window.openPropertyDetails = (prop, skipPushState = false) => {
         if (!skipPushState) {
             window.history.pushState({ propId: prop.id }, '', '/property/' + prop.id);
         }
+        
+        // Record view for analytics
+        EstatoStorage.recordView(prop.id);
+
+        // Populate Calculators
+        const calcPrice = document.getElementById('calcPrice');
+        const roiInvestment = document.getElementById('roiInvestment');
+        const roiRent = document.getElementById('roiRent');
+        
+        if (calcPrice) calcPrice.value = prop.price;
+        if (roiInvestment) roiInvestment.value = prop.price;
+        if (roiRent) roiRent.value = prop.type === 'Rent' ? prop.price : Math.round(prop.price * 0.003); // Guess 0.3% monthly yield for sale props
+
+        // Initial calculations
+        setTimeout(async () => {
+            window.calculateEMI();
+            window.calculateROI();
+            
+            // Map & POI Intelligence (Free Alternative using OpenStreetMap/Overpass)
+            let lat = prop.lat, lng = prop.lng;
+            if (!lat || !lng) {
+                const coords = await resolveLocationToCoords(`${prop.address}, ${prop.city}`);
+                if (coords) { lat = coords.lat; lng = coords.lng; }
+            }
+            initDetailsMap(lat, lng, prop.title);
+        }, 100);
+
         document.getElementById('detailsTitle').textContent = prop.title;
         document.getElementById('detailsLocation').innerHTML = `<i class="ph ph-map-pin"></i> ${escapeHtml(prop.address)}, ${escapeHtml(prop.city)}`;
         
@@ -3793,6 +3909,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (bidHistorySection) {
             bidHistorySection.style.display = 'none';
         }
+
+        // Note: initDetailsMap is already called asynchronously at the start of this function
+        // so we don't need to call it again here.
 
         document.getElementById('propertyDetailsModal').classList.add('active');
     };

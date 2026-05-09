@@ -1,8 +1,8 @@
 import { escapeHtml, showConfirm, showToast } from './utils.js';
 
-export function renderMessages(ctx) {
+export function renderMessages(ctx, targetInquiryId = null) {
     const { currentUser, EstatoStorage, viewContainer } = ctx;
-    const inquiries = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Admin') ? currentUser.id : null);
+    const inquiries = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? currentUser.id : null);
     
     // Auto-mark as read when viewing the messages list
     inquiries.forEach(inq => {
@@ -45,7 +45,7 @@ export function renderMessages(ctx) {
             ];
 
             return `
-                            <div class="surface-panel shadow-sm message-card ${inq.status === 'Unread' ? 'unread-glow' : ''}" style="padding: 1.5rem; transition: transform 0.2s;">
+                            <div class="surface-panel shadow-sm message-card ${inq.status === 'Unread' ? 'unread-glow' : ''}" data-inq-id="${inq.id}" style="padding: 1.5rem; transition: transform 0.2s;">
                                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
                                     <div style="display: flex; gap: 1rem; align-items: center;">
                                         <div class="avatar" style="background: var(--primary-light); color: var(--primary); font-weight: 700;">${inq.buyerName.charAt(0)}</div>
@@ -97,11 +97,28 @@ export function renderMessages(ctx) {
                 
                 <style>
                     .message-bubble:hover .msg-delete-btn { opacity: 1 !important; }
+                    .highlight-pulse { animation: pulse-highlight 2s ease-out 3; border: 2px solid var(--primary) !important; }
+                    @keyframes pulse-highlight { 
+                        0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(var(--primary-rgb), 0.4); }
+                        50% { transform: scale(1.01); box-shadow: 0 0 0 15px rgba(var(--primary-rgb), 0); }
+                        100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(var(--primary-rgb), 0); }
+                    }
                 </style>
             `;
     }
 
     viewContainer.innerHTML = html;
+
+    // Scroll and highlight if targetInquiryId is provided
+    if (targetInquiryId) {
+        setTimeout(() => {
+            const card = viewContainer.querySelector(`.message-card[data-inq-id="${targetInquiryId}"]`);
+            if (card) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                card.classList.add('highlight-pulse');
+            }
+        }, 400);
+    }
 
     // Attach listeners
     viewContainer.querySelectorAll('.thread-reply-btn').forEach(btn => {

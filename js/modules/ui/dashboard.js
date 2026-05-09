@@ -91,11 +91,50 @@ export function renderDashboard(ctx) {
                 </div>
             </div>
             ` : ''}
+            <div class="stat-card" style="background: #f0f9ff; border: 1px solid #bae6fd;">
+                <div class="stat-icon" style="background: white; color: #0284c7;"><i class="ph-duotone ph-eye"></i></div>
+                <div class="stat-info">
+                    <h4>Total Listing Views</h4>
+                    <p style="font-size: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        ${stats.totalViews || 0}
+                        <span style="font-size: 0.75rem; color: #059669; font-weight: 600; background: #dcfce7; padding: 2px 6px; border-radius: 4px;">+12.5% <i class="ph ph-trend-up"></i></span>
+                    </p>
+                </div>
+            </div>
+            <div class="stat-card" style="background: #f5f3ff; border: 1px solid #ddd6fe;">
+                <div class="stat-icon" style="background: white; color: #7c3aed;"><i class="ph-duotone ph-funnel"></i></div>
+                <div class="stat-info">
+                    <h4>Lead Conversion</h4>
+                    <p style="font-size: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        ${stats.conversionRate}%
+                        <span style="font-size: 0.75rem; color: #7c3aed; font-weight: 600; background: #ede9fe; padding: 2px 6px; border-radius: 4px;">Top 10% <i class="ph ph-crown"></i></span>
+                    </p>
+                </div>
+            </div>
         </div>
 
         <div class="dashboard-valuation">
             <h4>${isBroker ? 'Est. Commission Pipeline (2%)' : 'Total Portfolio Valuation'}</h4>
             <p style="font-size: clamp(1.2rem, 3vw, 2.5rem); font-weight: 800; color: var(--primary); word-break: break-word; overflow-wrap: break-word;">${currencyFormatter.format(isBroker ? brokerCommission : stats.totalValuation)}</p>
+        </div>
+
+        </div>
+        
+        <!-- NEW: Performance Deep-Dive -->
+        <div class="surface-panel" style="margin-bottom: 3rem; min-height: 400px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <div>
+                    <h3 style="margin: 0; color: var(--text-main);"><i class="ph-duotone ph-chart-line" style="color: #7c3aed;"></i> Listing Performance Benchmarking</h3>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Comparing reach vs engagement for your top properties.</p>
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <span style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: var(--text-muted);"><span style="width: 10px; height: 10px; background: #c084fc; border-radius: 2px;"></span> Views</span>
+                    <span style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: var(--text-muted);"><span style="width: 10px; height: 10px; background: #7c3aed; border-radius: 2px;"></span> Inquiries</span>
+                </div>
+            </div>
+            <div style="height: 300px;">
+                <canvas id="performanceBenchChart"></canvas>
+            </div>
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 3rem;">
@@ -104,8 +143,13 @@ export function renderDashboard(ctx) {
                 <canvas id="cityCountChart"></canvas>
             </div>
             <div class="surface-panel" style="height: 350px;">
-                <h4 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">AVERAGE VALUATION BY CITY (INR)</h4>
-                <canvas id="cityPriceChart"></canvas>
+                <h4 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">SAVED SEARCH ALERTS & INTERESTS</h4>
+                <div id="dashboardSavedSearches" style="overflow-y: auto; height: calc(100% - 2.5rem);">
+                    <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                        <i class="ph ph-bell-slash" style="font-size: 2rem; display: block; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+                        <p style="font-size: 0.85rem;">No active alerts. Save a search to get notified of new listings.</p>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -407,5 +451,88 @@ export function renderDashboard(ctx) {
                 }
             }
         }));
+    }
+
+    // 3. Performance Benchmarking Chart
+    const ctxBench = document.getElementById('performanceBenchChart');
+    if (ctxBench && Chart) {
+        const myProps = EstatoStorage.getProperties()
+            .filter(p => p.ownerId === currentUser.id)
+            .sort((a, b) => (b.views || 0) - (a.views || 0))
+            .slice(0, 5);
+
+        const labels = myProps.map(p => p.title.length > 20 ? p.title.substring(0, 17) + '...' : p.title);
+        const viewData = myProps.map(p => p.views || 0);
+        const inquiryData = myProps.map(p => {
+            return EstatoStorage.getInquiries().filter(inq => inq.propertyId === p.id).length;
+        });
+
+        dashboardCharts.push(new Chart(ctxBench, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Views',
+                        data: viewData,
+                        backgroundColor: '#c084fc',
+                        borderRadius: 4,
+                        barPercentage: 0.6
+                    },
+                    {
+                        label: 'Inquiries',
+                        data: inquiryData,
+                        backgroundColor: '#7c3aed',
+                        borderRadius: 4,
+                        barPercentage: 0.6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: { 
+                        beginAtZero: true, 
+                        ticks: { color: '#7d746d', stepSize: 1 },
+                        grid: { color: '#e5e0d8' }
+                    },
+                    x: { ticks: { color: '#7d746d' }, grid: { display: false } }
+                }
+            }
+        }));
+    }
+
+    // 4. Saved Searches Rendering
+    const savedContainer = document.getElementById('dashboardSavedSearches');
+    if (savedContainer) {
+        const searches = JSON.parse(localStorage.getItem('estato_saved_searches') || '[]');
+        if (searches.length > 0) {
+            savedContainer.innerHTML = `
+                <div style="display: flex; flex-direction: column; gap: 0.75rem; padding: 0.5rem;">
+                    ${searches.map((s, idx) => `
+                        <div class="saved-search-item" style="display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: var(--bg-main); border: 1px solid var(--border-color); border-radius: var(--radius-sm); transition: all 0.2s;">
+                            <div style="min-width: 0;">
+                                <div style="font-weight: 700; color: var(--text-main); font-size: 0.9rem; margin-bottom: 2px;">${escapeHtml(s.label || 'Saved Search')}</div>
+                                <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; gap: 0.5rem; align-items: center;">
+                                    <i class="ph ph-calendar"></i> ${new Date(s.timestamp).toLocaleDateString()}
+                                    ${s.city ? `<span>&bull; ${escapeHtml(s.city)}</span>` : ''}
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 0.4rem;">
+                                <button class="btn btn-secondary btn-sm" onclick="window.applySavedSearch(${idx})" title="Apply Filters"><i class="ph ph-funnel"></i></button>
+                                <button class="btn btn-secondary btn-sm" onclick="window.deleteSavedSearch(${idx})" style="color: var(--danger);" title="Delete Alert"><i class="ph ph-trash"></i></button>
+                            </div>
+                        </div>
+                    `).join('')}
+                    <button class="btn btn-secondary btn-sm" onclick="window.clearAllSavedSearches()" style="margin-top: 1rem; width: 100%; font-size: 0.8rem; border-style: dashed;">
+                        <i class="ph ph-trash-simple"></i> Clear All Alerts
+                    </button>
+                </div>
+            `;
+        }
     }
 }

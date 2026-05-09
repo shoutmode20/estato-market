@@ -17,6 +17,8 @@ let _markers = [];
 let _modalMap = null;
 let _modalMarker = null;
 let _isMapVisible = false;
+let _detailsMap = null;
+let _detailsPoiLayer = null;
 
 // City Geocoding (local fallback before Nominatim API)
 const CITY_COORDS = {
@@ -274,6 +276,164 @@ export function destroyModalMap() {
         _modalMap = null;
         _modalMarker = null;
     }
+}
+
+// ─── Details Modal Map & POI Intelligence ──────────────────────────────────
+
+/**
+ * Initializes the property details map and fetches nearby Points of Interest (POIs).
+ */
+export async function initDetailsMap(lat, lng, title) {
+    const container = document.getElementById('detailsMap');
+    if (!container) return;
+
+    if (_detailsMap) {
+        _detailsMap.remove();
+        _detailsMap = null;
+        _detailsPoiLayer = null;
+    }
+
+    const fLat = parseFloat(lat);
+    const fLng = parseFloat(lng);
+    if (isNaN(fLat) || isNaN(fLng)) {
+        container.innerHTML = '<div style="padding:2rem; text-align:center; color:var(--text-muted);">Coordinate data missing for this property.</div>';
+        return;
+    }
+
+    _detailsMap = L.map('detailsMap', { zoomControl: true, scrollWheelZoom: false }).setView([fLat, fLng], 15);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; CartoDB',
+        subdomains: 'abcd',
+        maxZoom: 20
+    }).addTo(_detailsMap);
+
+    // Main Property Marker
+    const mainIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: `<div style="background:var(--primary); color:white; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:3px solid white; box-shadow:0 2px 10px rgba(0,0,0,0.2);"><i class="ph-fill ph-house" style="font-size:1.2rem;"></i></div>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
+    });
+    L.marker([fLat, fLng], { icon: mainIcon }).addTo(_detailsMap).bindPopup(`<strong>${escapeHtml(title)}</strong>`).openPopup();
+
+    _detailsPoiLayer = L.layerGroup().addTo(_detailsMap);
+
+    // Fetch and Render POIs
+    updateDetailsPois(fLat, fLng);
+}
+
+async function updateDetailsPois(lat, lng) {
+    const poiContainer = document.getElementById('detailsPoiContainer');
+    if (poiContainer) poiContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted);"><i class="ph ph-spinner ph-spin"></i> Analyzing neighborhood connectivity...</div>';
+
+    try {
+        const pois = await fetchNearbyPOIs(lat, lng);
+        
+        if (poiContainer) {
+            if (Object.keys(pois).length === 0) {
+                poiContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted); font-style:italic;">No major points of interest found in the immediate vicinity.</div>';
+                return;
+            }
+
+            const categories = [
+                { key: 'school', label: 'Education', icon: 'ph-graduation-cap', color: '#3b82f6' },
+                { key: 'hospital', label: 'Healthcare', icon: 'ph-first-aid-kit', color: '#ef4444' },
+                { key: 'transit', label: 'Transit', icon: 'ph-train', color: '#10b981' },
+                { key: 'shopping', label: 'Lifestyle', icon: 'ph-shopping-bag', color: '#f59e0b' }
+            ];
+
+            let html = '';
+            categories.forEach(cat => {
+                const items = pois[cat.key];
+                if (items && items.length > 0) {
+                    html += `
+                        <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                            <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">
+                                <i class="ph ${cat.icon}" style="color:${cat.color}"></i> ${cat.label}
+                            </div>
+                            <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.5rem;">
+                                ${items.slice(0, 3).map(item => `
+                                    <div class="poi-badge" style="display:flex; align-items:center; gap:0.4rem; padding:0.35rem 0.75rem; background:var(--bg-main); border:1px solid var(--border-color); border-radius:100px; font-size:0.8rem;">
+                                        <span style="font-weight:600; color:var(--text-main);">${escapeHtml(item.name || 'Nearby ' + cat.label)}</span>
+                                        <span style="color:var(--text-muted); font-size:0.75rem;">${(item.distance / 1000).toFixed(1)}km</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+
+                    // Add markers to map
+                    items.forEach(item => {
+                        const poiIcon = L.divIcon({
+                            className: 'poi-map-icon',
+                            html: `<div style="background:${cat.color}; color:white; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid white; box-shadow:0 1px 5px rgba(0,0,0,0.15);"><i class="ph ${cat.icon}" style="font-size:0.8rem;"></i></div>`,
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        });
+                        L.marker([item.lat, item.lon], { icon: poiIcon }).addTo(_detailsPoiLayer).bindPopup(`<strong>${escapeHtml(item.name || cat.label)}</strong><br>${(item.distance / 1000).toFixed(1)} km away`);
+                    });
+                }
+            });
+            poiContainer.innerHTML = html || '<p style="font-size:0.85rem; color:var(--text-muted);">Area details optimized.</p>';
+        }
+
+    } catch (err) {
+        console.error('[MapEngine] POI fetch failed:', err);
+        if (poiContainer) poiContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--danger);">Unable to load neighborhood insights at this time.</div>';
+    }
+}
+
+async function fetchNearbyPOIs(lat, lng) {
+    const radius = 2500; // 2.5km search
+    // Overpass QL for Education, Healthcare, Transit, and Malls
+    const query = `
+        [out:json][timeout:25];
+        (
+          node["amenity"~"school|college|university|kindergarten"](around:${radius},${lat},${lng});
+          node["amenity"~"hospital|clinic|doctors"](around:${radius},${lat},${lng});
+          node["highway"="bus_stop"](around:${radius},${lat},${lng});
+          node["railway"~"station|subway_entrance"](around:${radius},${lat},${lng});
+          node["shop"~"mall|supermarket"](around:${radius},${lat},${lng});
+          node["amenity"="marketplace"](around:${radius},${lat},${lng});
+        );
+        out body;
+    `;
+
+    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+    if (!res.ok) throw new Error('Overpass API error');
+    
+    const data = await res.json();
+    const results = data.elements || [];
+
+    const grouped = { school: [], hospital: [], transit: [], shopping: [] };
+
+    results.forEach(el => {
+        const dist = calculateDistance(lat, lng, el.lat, el.lon);
+        const item = { name: el.tags.name, lat: el.lat, lon: el.lon, distance: dist };
+
+        if (el.tags.amenity && /school|college|university|kindergarten/.test(el.tags.amenity)) grouped.school.push(item);
+        else if (el.tags.amenity && /hospital|clinic|doctors/.test(el.tags.amenity)) grouped.hospital.push(item);
+        else if (el.tags.highway === 'bus_stop' || el.tags.railway) grouped.transit.push(item);
+        else if (el.tags.shop || el.tags.amenity === 'marketplace') grouped.shopping.push(item);
+    });
+
+    // Sort by proximity
+    Object.keys(grouped).forEach(k => grouped[k].sort((a, b) => a.distance - b.distance));
+    
+    return grouped;
+}
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // metres
+    const φ1 = lat1 * Math.PI/180;
+    const φ2 = lat2 * Math.PI/180;
+    const Δφ = (lat2-lat1) * Math.PI/180;
+    const Δλ = (lon2-lon1) * Math.PI/180;
+    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
 }
 
 // ─── Private Helpers ───────────────────────────────────────────────────────

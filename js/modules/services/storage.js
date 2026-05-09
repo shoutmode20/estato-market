@@ -21,12 +21,9 @@ const provider = (typeof firebase !== 'undefined') ? new firebase.auth.GoogleAut
 if (provider) provider.addScope('https://www.googleapis.com/auth/drive.file');
 
 
-// Enable Firebase Realtime Database Persistence
-try {
-    if (db) db.ref().keepSynced(true);
-} catch (e) {
-    console.warn("Persistence failed to initialize:", e);
-}
+// Firebase offline persistence is handled automatically by the SDK.
+// keepSynced() was removed — it is not available in the current Firebase SDK version
+// and was crashing the storage module at boot, causing all property listeners to fail.
 
 // Store OAuth Credential Memory
 let _driveAccessToken = sessionStorage.getItem('estato_drive_token');
@@ -422,8 +419,8 @@ export const EstatoStorage = {
             _globalListenersActive = true;
             console.log("[Estato Firebase] Initializing Global Real-time Listeners...");
 
-            // Latest Properties
-            _trackListener(db.ref('properties').limitToLast(20), (snap) => {
+            // Latest 100 Properties — increased from 20 to prevent seller listings vanishing
+            _trackListener(db.ref('properties').limitToLast(100), (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 self.mergeProperties(latestBatch);
@@ -446,6 +443,21 @@ export const EstatoStorage = {
             
             _initializedUid = uid;
             _initializedRole = role;
+
+            // ── Seller/Broker: Always load ALL of the user's own listings ──────
+            // This ensures a seller's properties are never hidden by the global limitToLast(100).
+            if (role === 'Seller' || role === 'Broker' || role === 'Admin') {
+                _trackListener(
+                    db.ref('properties').orderByChild('ownerId').equalTo(uid),
+                    (snap) => {
+                        if (snap.exists()) {
+                            const owned = Object.values(snap.val());
+                            self.mergeProperties(owned);
+                        }
+                    },
+                    (err) => console.error("[Storage] Owned Properties Listener Error:", err.message)
+                );
+            }
 
             // Favorites
             _trackListener(db.ref('favorites/' + uid), (snap) => {
@@ -654,8 +666,43 @@ export const EstatoStorage = {
         }
     },
 
+    async verifyProperty(id) {
+        if (!_can('ADMIN_ONLY')) throw new Error("Unauthorized: Only Admins can verify properties.");
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            await _syncToCloud(`properties/${id}/isVerified`, true, 'set');
+            const index = _memCache.properties.findIndex(p => p.id === id);
+            if (index !== -1) {
+                _memCache.properties[index].isVerified = true;
+                this.notifyListeners();
+            }
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error("[Storage] Verification failed:", e.message);
+            if (_syncCallback) _syncCallback('error');
+            return false;
+        }
+    },
+
     getPropertyById(id) {
         return this.getProperties().find(p => p.id === id);
+    },
+
+    async recordView(propertyId) {
+        const index = _memCache.properties.findIndex(p => p.id === propertyId);
+        if (index === -1) return;
+
+        const prop = { ..._memCache.properties[index] };
+        prop.views = (prop.views || 0) + 1;
+
+        // Update local state
+        const properties = [..._memCache.properties];
+        properties[index] = prop;
+        _setState({ properties });
+
+        // Debounced sync to cloud
+        _queueCloudWrite('properties/' + propertyId + '/views', prop.views);
     },
 
     async addProperty(property) {
@@ -834,6 +881,7 @@ export const EstatoStorage = {
         inquiry.id = 'inq_' + Date.now();
         inquiry.date = new Date().toISOString();
         inquiry.status = 'Unread';
+        inquiry.pipelineStatus = 'New';
 
         const inquiries = [..._memCache.inquiries, inquiry];
         _setState({ inquiries });
@@ -953,6 +1001,25 @@ export const EstatoStorage = {
             return true;
         } catch (e) {
             console.error("[Storage] Failed to mark inquiry read:", e.message);
+            return false;
+        }
+    },
+
+    async updateInquiryPipelineStatus(id, newStatus) {
+        if (_syncCallback) _syncCallback('syncing');
+        try {
+            await _syncToCloud(`inquiries/${id}/pipelineStatus`, newStatus, 'set');
+            // Local update (listeners will pick up the cloud change, but we can be optimistic)
+            const index = _memCache.inquiries.findIndex(i => i.id === id);
+            if (index !== -1) {
+                _memCache.inquiries[index].pipelineStatus = newStatus;
+                this.notifyListeners();
+            }
+            if (_syncCallback) _syncCallback('synced');
+            return true;
+        } catch (e) {
+            console.error("[Storage] Pipeline status update failed:", e.message);
+            if (_syncCallback) _syncCallback('error');
             return false;
         }
     },
@@ -1077,6 +1144,7 @@ export const EstatoStorage = {
         const stats = { 
             totalProperties: filtered.length, 
             totalValue: 0, 
+            totalViews: 0,
             forSale: 0, 
             forRent: 0, 
             pendingCount: 0,
@@ -1088,7 +1156,8 @@ export const EstatoStorage = {
         };
 
         filtered.forEach(p => {
-            stats.totalValue += p.price;
+            stats.totalValue += (p.price || 0);
+            stats.totalViews += (p.views || 0);
             if (p.type === 'Sale') stats.forSale++;
             if (p.type === 'Rent') stats.forRent++;
             if (p.status === 'Pending') stats.pendingCount++;
@@ -1119,6 +1188,8 @@ export const EstatoStorage = {
         return {
             totalProperties: stats.totalProperties,
             totalInquiries: userInquiries.length,
+            totalViews: stats.totalViews,
+            conversionRate: stats.totalViews > 0 ? ((userInquiries.length / stats.totalViews) * 100).toFixed(1) : 0,
             totalCities: Object.keys(stats.cityData).length,
             forSale: stats.forSale,
             forRent: stats.forRent,
