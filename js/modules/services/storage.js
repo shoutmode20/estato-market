@@ -234,7 +234,7 @@ async function _flushCloudQueue() {
         console.error('[Storage] Cloud flush failed:', e);
         // Do NOT re-queue — this would cause an infinite retry loop.
         // Firebase realtime listeners will reconcile the correct server state.
-        if (_syncCallback) _syncCallback('error');
+        if (_syncCallback) _syncCallback('error', e.message || 'Network or permissions error');
     }
 }
 

@@ -373,19 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return R * c;
     }
 
-    async function resolveLocationToCoords(query) {
-        if (!query) return null;
-        try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`);
-            const data = await res.json();
-            if (data && data.length > 0) {
-                return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-            }
-        } catch (e) {
-            console.error('[Geocoding] Selection failed:', e);
-        }
-        return null;
-    }
+    // (Removed duplicate resolveLocationToCoords function)
 
     function getSimilarProperties(property) {
         return coreSimilarProps(property, EstatoStorage.getProperties());
@@ -635,21 +623,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const currencyFormatter = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 
     // --- Sync Badge Updater ---
-    function updateSyncBadge(state) {
+    let _syncErrorTimeout = null;
+    function updateSyncBadge(state, msg = '') {
         const badge = syncBadge;
         badge.className = 'sync-badge';
+        
+        if (_syncErrorTimeout) {
+            clearTimeout(_syncErrorTimeout);
+            _syncErrorTimeout = null;
+        }
+
         if (state === 'syncing') {
             badge.classList.add('sync-syncing');
             badge.innerHTML = '<i class="ph ph-arrow-clockwise"></i><span>Saving...</span>';
+            badge.title = 'Syncing changes to cloud...';
         } else if (state === 'error') {
             badge.classList.add('sync-error');
             badge.innerHTML = '<i class="ph ph-warning"></i><span>Error</span>';
+            badge.title = msg ? `Sync Error: ${msg}` : 'A background sync failed. Check console.';
+            
+            // Auto-clear error after 5 seconds if everything else is fine
+            _syncErrorTimeout = setTimeout(() => {
+                if (navigator.onLine) updateSyncBadge('synced');
+            }, 5000);
         } else if (state === 'offline') {
             badge.classList.add('sync-error');
             badge.innerHTML = '<i class="ph ph-wifi-slash"></i><span>Offline</span>';
+            badge.title = 'You are currently offline.';
         } else {
             badge.classList.add('sync-synced');
             badge.innerHTML = '<i class="ph ph-check-circle"></i><span>Synced</span>';
+            badge.title = 'All data is synced and up to date.';
         }
     }
 
@@ -707,9 +711,16 @@ document.addEventListener('DOMContentLoaded', () => {
             return { lat: CITY_COORDS[localMatchKey][0], lng: CITY_COORDS[localMatchKey][1] };
         }
 
-        // 3. Fallback to API (Nominatim)
+        // 3. Fallback to API (Nominatim) with Indian context for much better accuracy
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(normalized)}&limit=1`);
+            // Append India if it's not in the string to help OpenStreetMap
+            let searchQuery = normalized;
+            if (!searchQuery.includes('india')) {
+                searchQuery += ', India';
+            }
+            
+            // Use countrycodes=in to restrict results to India
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&countrycodes=in&limit=1`);
             const data = await res.json();
             if (data && data.length > 0) {
                 return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
@@ -3539,28 +3550,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (resEl) resEl.textContent = currencyFormatter.format(emi);
     };
 
-    window.calculateROI = () => {
-        const price = parseFloat(document.getElementById('roiInvestment').value) || 0;
-        const rent = parseFloat(document.getElementById('roiRent').value) || 0;
-        const maint = parseFloat(document.getElementById('roiMaint').value) || 0;
-        const tax = parseFloat(document.getElementById('roiTax').value) || 0;
-
-        if (price > 0 && rent > 0) {
-            const annualRent = rent * 12;
-            const grossYield = (annualRent / price) * 100;
-            const netAnnual = annualRent - (maint * 12) - tax;
-            const netYield = (netAnnual / price) * 100;
-
-            document.getElementById('roiResult').innerHTML = `
-                ${grossYield.toFixed(2)}% <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">(Gross)</span>
-                <div style="font-size: 0.8rem; color: #059669; font-weight: 600; margin-top: 2px;">
-                    ${netYield.toFixed(2)}% <span style="color: var(--text-muted); font-weight: 500;">Net Yield</span>
-                </div>
-            `;
-        } else {
-            document.getElementById('roiResult').textContent = '0%';
-        }
-    };
 
     window.openPropertyDetails = (prop, skipPushState = false) => {
         if (!skipPushState) {
@@ -3572,17 +3561,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Populate Calculators
         const calcPrice = document.getElementById('calcPrice');
-        const roiInvestment = document.getElementById('roiInvestment');
-        const roiRent = document.getElementById('roiRent');
+        const emiSection = document.getElementById('emiCalculatorSection');
+        
+        if (emiSection) {
+            emiSection.style.display = prop.type === 'Rent' ? 'none' : 'block';
+        }
         
         if (calcPrice) calcPrice.value = prop.price;
-        if (roiInvestment) roiInvestment.value = prop.price;
-        if (roiRent) roiRent.value = prop.type === 'Rent' ? prop.price : Math.round(prop.price * 0.003); // Guess 0.3% monthly yield for sale props
 
         // Initial calculations
         setTimeout(async () => {
-            window.calculateEMI();
-            window.calculateROI();
+            if (prop.type !== 'Rent') window.calculateEMI();
             
             // Map & POI Intelligence (Free Alternative using OpenStreetMap/Overpass)
             let lat = prop.lat, lng = prop.lng;

@@ -399,8 +399,24 @@ async function fetchNearbyPOIs(lat, lng) {
         out body;
     `;
 
-    const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
-    if (!res.ok) throw new Error('Overpass API error');
+    const endpoints = [
+        'https://overpass-api.de/api/interpreter',
+        'https://lz4.overpass-api.de/api/interpreter',
+        'https://z.overpass-api.de/api/interpreter'
+    ];
+
+    let res = null;
+    for (const url of endpoints) {
+        try {
+            res = await fetch(`${url}?data=${encodeURIComponent(query)}`);
+            if (res.ok) break;
+            console.warn(`[MapEngine] Overpass instance rate-limited: ${url}`);
+        } catch (e) {
+            console.warn(`[MapEngine] Overpass instance failed: ${url}`);
+        }
+    }
+
+    if (!res || !res.ok) throw new Error('All Overpass API instances failed or rate-limited');
     
     const data = await res.json();
     const results = data.elements || [];
