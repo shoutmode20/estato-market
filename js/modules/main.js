@@ -1023,7 +1023,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (el.getAttribute('data-view') === 'messages') el.style.display = 'flex'; // Buyers always see messages
                 else el.style.display = 'none';
             });
-        } else if (role === 'Seller' || role === 'Broker') {
+        } else if (role === 'Seller') {
+            adminElements.forEach(el => {
+                const view = el.getAttribute('data-view');
+                if (view === 'audit-logs' || view === 'crm') el.style.display = 'none';
+                else el.style.display = 'flex';
+            });
+        } else if (role === 'Broker') {
             adminElements.forEach(el => {
                 if (el.getAttribute('data-view') === 'audit-logs') el.style.display = 'none';
                 else el.style.display = 'flex';
@@ -1807,9 +1813,16 @@ document.addEventListener('DOMContentLoaded', () => {
         dashboardCharts = [];
 
         // RBAC View Security Check
-        if(currentUser && currentUser.role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities')) {
-            renderProperties(); // Fallback secure redirect
-            return;
+        if (currentUser) {
+            const role = currentUser.role;
+            if (role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities' || viewName === 'crm')) {
+                renderProperties(); 
+                return;
+            }
+            if (role === 'Seller' && viewName === 'crm') {
+                renderDashboard();
+                return;
+            }
         }
 
         switch(viewName) {
