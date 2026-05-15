@@ -137,7 +137,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
                     ${prop.isVerified ? `<span class="badge" style="background: #0ea5e9; color: white; border: none; box-shadow: 0 0 10px rgba(14, 165, 233, 0.4);"><i class="ph-fill ph-seal-check"></i> Verified</span>` : ''}
                     ${meta ? `<span class="badge" style="background: var(--${meta.color}); color: white;"><i class="${meta.icon}"></i> ${escapeHtml(prop.category)}</span>` : ''}
                     <span class="badge ${badgeClass}">${escapeHtml(prop.type)}</span>
-                    <span class="badge" style="background: ${prop.status === 'PaymentPending' ? '#fbbf24' : 'rgba(44,40,37,0.85)'}; color: ${prop.status === 'PaymentPending' ? 'var(--text-main)' : 'white'};">
+                    <span class="badge" style="background: ${prop.status === 'PaymentPending' ? '#fbbf24' : 'rgba(44,40,37,0.85)'}; color: ${prop.status === 'PaymentPending' ? '#000' : 'white'};">
                         ${prop.status === 'PaymentPending' ? '<i class="ph-fill ph-clock-countdown"></i> Payment Pending' : escapeHtml(prop.status)}
                     </span>
                     ${prop.winnerName ? `<span class="badge" style="background: var(--primary); color: white;"><i class="ph-fill ph-trophy"></i> Winner: ${escapeHtml(prop.winnerName)}</span>` : ''}

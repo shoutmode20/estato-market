@@ -57,6 +57,27 @@ body.dark-mode {
     --overlay-end: rgba(30, 41, 59, 0.95);
 }
 
+body.dark-mode .stat-card[style] { background: var(--bg-surface) !important; border-color: var(--border-color) !important; }
+body.dark-mode .stat-icon[style] { background: var(--bg-hover) !important; }
+body.dark-mode .badge.rent { color: var(--bg-main) !important; }
+body.dark-mode .form-group input,
+body.dark-mode .form-group select,
+body.dark-mode .form-group textarea,
+body.dark-mode input[type="number"],
+body.dark-mode input[type="text"],
+body.dark-mode input[type="datetime-local"] {
+    background: var(--bg-main);
+    color: var(--text-main);
+}
+body.dark-mode .form-group input:focus,
+body.dark-mode .form-group select:focus,
+body.dark-mode .form-group textarea:focus,
+body.dark-mode input[type="number"]:focus,
+body.dark-mode input[type="text"]:focus,
+body.dark-mode input[type="datetime-local"]:focus {
+    background: var(--bg-surface);
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -410,7 +431,7 @@ body {
     width: 100%;
     min-width: 600px;
     border-collapse: collapse;
-    background: white;
+    background: var(--bg-surface);
 }
 .comparison-table th, .comparison-table td {
     padding: 1.25rem 1.5rem;
@@ -981,7 +1002,7 @@ body {
     z-index: 20; /* Ensure it's above badges */
 }
 .fav-float-btn:hover { transform: scale(1.1); color: var(--text-main); }
-.fav-float-btn.active { color: var(--danger); background: white; }
+.fav-float-btn.active { color: var(--danger); background: var(--bg-surface); }
 
 /* Compare button selected state — orange, distinct from the red favourite */
 .compare-btn.selected {
@@ -1541,7 +1562,7 @@ input[type="file"] { padding: 1rem; border: 1px dashed var(--border-color); back
     top: calc(100% + 15px);
     right: -10px;
     width: 380px;
-    background: white;
+    background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
