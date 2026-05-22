@@ -178,9 +178,12 @@
 
     <!-- Core Application Container (Hidden until Auth succeeds) -->
     <div id="appContainer" class="app-container hidden">
+
+        <!-- Mobile Sidebar Overlay -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
         
         <!-- Navigation Sidebar -->
-        <aside class="sidebar surface-panel">
+        <aside class="sidebar surface-panel" id="mainSidebar">
             <div class="logo">
                 <i class="ph-duotone ph-buildings"></i>
                 <h2>Estato</h2>
@@ -242,6 +245,9 @@
         <!-- Main Display Pane -->
         <main class="main-content">
             <header class="topbar surface-panel">
+                <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open navigation">
+                    <i class="ph ph-list"></i>
+                </button>
                 <div class="search-bar" style="flex: 1;">
                     <i class="ph ph-magnifying-glass"></i>
                     <input type="text" id="searchInput" placeholder="Search by city, title, address or PIN code...">
@@ -928,6 +934,37 @@
                     .catch(err => console.log('SW registration failed:', err));
             });
         }
+    </script>
+
+    <!-- Mobile Sidebar Toggle -->
+    <script>
+        (function () {
+            const menuBtn = document.getElementById('mobileMenuBtn');
+            const sidebar = document.getElementById('mainSidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            }
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+
+            if (menuBtn) menuBtn.addEventListener('click', openSidebar);
+            if (overlay) overlay.addEventListener('click', closeSidebar);
+
+            // Close sidebar when a nav item is tapped on mobile
+            document.addEventListener('click', function (e) {
+                const navItem = e.target.closest('.nav-item');
+                if (navItem && window.innerWidth <= 768) {
+                    closeSidebar();
+                }
+            });
+        })();
     </script>
 </body>
 </html>

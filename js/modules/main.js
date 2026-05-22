@@ -2138,6 +2138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let properties = EstatoStorage.getProperties();
 
         // RBAC Filtering (Fraud Prevention Sandbox)
+        if (!currentUser) return; // Guard: wait for auth to complete before rendering
         if (currentUser.role === 'Buyer') {
             properties = properties.filter(p => p.status !== 'Pending');
         } else if (currentUser.role === 'Seller' || currentUser.role === 'Broker') {

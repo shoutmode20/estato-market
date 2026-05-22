@@ -426,15 +426,19 @@ export const EstatoStorage = {
                 self.mergeProperties(latestBatch);
             }, (err) => console.error("[Storage] Property Listener Error:", err.message));
 
-            // Platform activity feed
-            _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
-                _setState({ activities: snap.exists() ? Object.values(snap.val()).reverse() : [] });
-            }, (err) => console.error("[Storage] Activity Listener Error:", err.message));
+            // Platform activity feed — Admin only (matches Firebase rules)
+            if (role === 'Admin') {
+                _trackListener(db.ref('activities').orderByChild('timestamp').limitToLast(100), (snap) => {
+                    _setState({ activities: snap.exists() ? Object.values(snap.val()).reverse() : [] });
+                }, (err) => console.warn("[Storage] Activity Listener Error:", err.message));
+            }
 
-            // Reviews
-            _trackListener(db.ref('reviews'), (snap) => {
-                _setState({ reviews: snap.exists() ? Object.values(snap.val()) : [] });
-            }, (err) => console.error("[Storage] Reviews Listener Error:", err.message));
+            // Reviews — all authenticated users
+            if (uid) {
+                _trackListener(db.ref('reviews'), (snap) => {
+                    _setState({ reviews: snap.exists() ? Object.values(snap.val()) : [] });
+                }, (err) => console.warn("[Storage] Reviews Listener Error:", err.message));
+            }
         }
 
         // 2. Initialize User-Specific Listeners (Whenever UID or Role changes)
