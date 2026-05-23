@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<!-- Estato SEO Updated -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Estato V12.1 — The definitive premium real estate marketplace. Real-time listings, proximity search, and seamless secure property management.">
+    <meta property="og:title" content="Estato V12.1 | Premium Real Estate Marketplace">
+    <meta property="og:description" content="The next generation of real estate discovery. Secure, real-time, and mobile-first.">
+    <meta property="og:image" content="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?q=80&w=1200&auto=format&fit=crop">
+    <meta property="og:type" content="website">
+    <meta name="theme-color" content="#ea580c">
+    <title>Estato V12.1 | Premium Real Estate Marketplace</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+    <!-- PDF Generation libs removed from head (already declared at bottom with defer/async if needed) -->
+    <!-- PWA Config -->
+    <link rel="manifest" href="/manifest.json">
+    
+    <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/buildings.png">
+    <!-- Styles -->
+    <!-- Leaflet Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+    <link rel="stylesheet" href="/css/styles.css?v=12.1">
+    <style>
+        .fav-btn.active i { color: #ef4444 !important; }
+    </style>
+</head>
+<body>
+    <script>
+        if (localStorage.getItem('estato_theme') === 'dark') {
+            document.body.classList.add('dark-mode');
+        }
+    </script>
+
+    <!-- Unified Google Sign-In Screen -->
+    <div id="loginScreen" class="auth-overlay">
+        <div class="auth-card">
+            <button id="authThemeToggleBtn" class="btn btn-icon" style="position: absolute; top: 1.5rem; right: 1.5rem;" title="Toggle Dark Mode">
+                <i class="ph ph-moon" id="authThemeToggleIcon"></i>
+            </button>
+            <div class="auth-header">
+                <i class="ph-duotone ph-buildings" id="authLogoIcon" style="font-size: 3.5rem; color: var(--primary); margin-bottom: 0.75rem; display: block; cursor: default; user-select: none; transition: transform 0.15s ease, color 0.15s ease;" title=""></i>
+                <div id="adminUnlockHint" style="font-size: 0.7rem; color: transparent; height: 1rem; margin-bottom: 0.75rem; transition: color 0.4s ease; letter-spacing: 0.08em; font-weight: 600;"></div>
+                <h1>Estato</h1>
+                <p>The Future of Real Estate</p>
+            </div>
+            
+            <div class="auth-body">
+                <p style="font-size: 0.9rem; color: #94a3b8; margin-bottom: 1.5rem;">Select your workspace role:</p>
+                <div class="role-selector" id="loginRoleSelector">
+                    <div class="role-card" data-role="Buyer">
+                        <i class="ph ph-identification-card"></i>
+                        <span>Buyer</span>
+                        <small>Browse & Buy</small>
+                    </div>
+                    <div class="role-card active" data-role="Seller">
+                        <i class="ph ph-house-line"></i>
+                        <span>Seller</span>
+                        <small>List & Sell</small>
+                    </div>
+                    <div class="role-card" data-role="Broker">
+                        <i class="ph ph-briefcase"></i>
+                        <span>Broker</span>
+                        <small>Manage Portfolios</small>
+                    </div>
+                    <div class="role-card" data-role="Admin" id="adminRoleCard" style="display:none; opacity:0; transform: scale(0.8); transition: opacity 0.35s ease, transform 0.35s ease;">
+                        <i class="ph ph-shield-check"></i>
+                        <span>Admin</span>
+                        <small>Full Control</small>
+                    </div>
+                </div>
+                <input type="hidden" id="selectedRole" value="Seller">
+            </div>
+
+            <button class="btn btn-primary shadow-hover" id="googleLoginBtn" style="width: 100%; margin-top: 2rem; font-size: 1.05rem; padding: 0.85rem;">
+                <i class="ph ph-google-logo" style="font-size: 1.25rem;"></i>
+                Sign in with Google
+            </button>
+
+            <p id="loginErrorMsg" class="form-error" style="margin-top: 1.5rem; height: 1.2rem;"></p>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            const CLICKS_NEEDED = 5;
+            const RESET_MS = 2000;
+            let clickCount = 0;
+            let resetTimer = null;
+            let unlocked = false;
+
+            const logo = document.getElementById('authLogoIcon');
+            const adminCard = document.getElementById('adminRoleCard');
+            const hint = document.getElementById('adminUnlockHint');
+
+            if (!logo || !adminCard) return;
+
+            function flashLogo() {
+                logo.style.transform = 'scale(1.2)';
+                logo.style.color = '#f97316';
+                setTimeout(() => {
+                    logo.style.transform = 'scale(1)';
+                    logo.style.color = 'var(--primary)';
+                }, 150);
+            }
+
+            function showAdminCard() {
+                if (unlocked && adminCard.style.display === 'flex') return;
+                unlocked = true;
+                adminCard.style.display = 'flex';
+                // Force reflow so transition fires
+                void adminCard.offsetWidth;
+                adminCard.style.opacity = '1';
+                adminCard.style.transform = 'scale(1)';
+                hint.textContent = '🔓 Admin access unlocked';
+                hint.style.color = '#22c55e';
+                setTimeout(() => {
+                    hint.style.color = 'transparent';
+                }, 3000);
+            }
+
+            // Way 1: Secret Clicks
+            logo.addEventListener('click', function () {
+                if (unlocked) return;
+                clickCount++;
+                flashLogo();
+
+                const remaining = CLICKS_NEEDED - clickCount;
+                if (remaining > 0 && clickCount > 1) {
+                    hint.textContent = '●'.repeat(clickCount) + '○'.repeat(remaining);
+                    hint.style.color = '#94a3b8';
+                }
+
+                if (resetTimer) clearTimeout(resetTimer);
+                resetTimer = setTimeout(() => {
+                    clickCount = 0;
+                    hint.textContent = '';
+                    hint.style.color = 'transparent';
+                }, RESET_MS);
+
+                if (clickCount >= CLICKS_NEEDED) {
+                    clearTimeout(resetTimer);
+                    showAdminCard();
+                }
+            });
+
+            // Way 2: URL Parameter (?admin=true)
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('admin') || urlParams.get('mode') === 'admin') {
+                showAdminCard();
+            }
+
+            // Way 3: Keyboard Shortcut (Ctrl + Alt + A)
+            window.addEventListener('keydown', (e) => {
+                if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'a') {
+                    e.preventDefault();
+                    showAdminCard();
+                }
+            });
+        })();
+    </script>
+
+    <!-- Data Hydration Loading Overlay -->
+    <div id="loadingOverlay" class="auth-overlay hidden" style="background: rgba(253, 251, 247, 0.95); z-index: 2000;">
+        <div class="loading-content" style="text-align: center;">
+            <div class="spinner" style="width: 50px; height: 50px; border: 4px solid var(--border-color); border-top: 4px solid var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 1.5rem;"></div>
+            <h2>Loading Estato...</h2>
+            <p id="loadingStatusText" style="color: var(--text-muted);">Syncing global marketplace data...</p>
+        </div>
+    </div>
+
+
+    <!-- Core Application Container (Hidden until Auth succeeds) -->
+    <div id="appContainer" class="app-container hidden">
+
+        <!-- Mobile Sidebar Overlay -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+        
+        <!-- Navigation Sidebar -->
+        <aside class="sidebar surface-panel" id="mainSidebar">
+            <div class="logo">
+                <i class="ph-duotone ph-buildings"></i>
+                <h2>Estato</h2>
+            </div>
+            
+            <ul class="nav-links">
+                <li class="nav-item active admin-only" data-view="dashboard">
+                    <i class="ph ph-squares-four"></i>
+                    <span>Dashboard</span>
+                </li>
+                <li class="nav-item" data-view="properties">
+                    <i class="ph ph-house"></i>
+                    <span>All Properties</span>
+                </li>
+                <li class="nav-item admin-only" data-view="cities">
+                    <i class="ph ph-map-pin"></i>
+                    <span>Service Areas</span>
+                </li>
+                <li class="nav-item admin-only" data-view="crm">
+                    <i class="ph ph-kanban"></i>
+                    <span>Lead Pipeline</span>
+                </li>
+                <li class="nav-item admin-only" data-view="messages">
+                    <i class="ph ph-envelope"></i>
+                    <span>Messages</span>
+                    <span class="nav-badge hidden" id="msgBadge"></span>
+                </li>
+                <li class="nav-item admin-only" data-view="audit-logs">
+                    <i class="ph ph-scroll"></i>
+                    <span>Audit Logs</span>
+                </li>
+                <li class="nav-item" data-view="watchlist">
+                    <i class="ph ph-heart"></i>
+                    <span>Saved Properties</span>
+                </li>
+                <li class="nav-item" data-view="auctions">
+                    <i class="ph ph-gavel"></i>
+                    <span>My Auctions</span>
+                </li>
+
+                <div class="title-divider">Account</div>
+                <li class="nav-item" data-view="profile">
+                    <i class="ph ph-user-circle"></i>
+                    <span>My Profile</span>
+                </li>
+                <li class="nav-item" id="themeToggleBtn">
+                    <i class="ph ph-moon" id="themeToggleIcon"></i>
+                    <span id="themeToggleText">Dark Mode</span>
+                </li>
+            </ul>
+
+            <div class="add-btn-container admin-only">
+                <button class="btn btn-primary w-full shadow-hover" id="openAddModalBtn">
+                    <i class="ph ph-plus"></i> Add Listing
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Display Pane -->
+        <main class="main-content">
+            <header class="topbar surface-panel">
+                <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open navigation">
+                    <i class="ph ph-list"></i>
+                </button>
+                <div class="search-bar" style="flex: 1;">
+                    <i class="ph ph-magnifying-glass"></i>
+                    <input type="text" id="searchInput" placeholder="Search by city, title, address or PIN code...">
+                </div>
+                <button class="btn btn-secondary shadow-hover" id="filterToggleBtn" style="margin-right: 1.5rem;" onclick="document.getElementById('advancedFiltersPanel').style.display = document.getElementById('advancedFiltersPanel').style.display === 'none' ? 'block' : 'none'"><i class="ph ph-sliders-horizontal"></i> Filters</button>
+                
+                <!-- View Toggle V11 (Removed as requested) -->
+                <div class="user-profile">
+                    <div class="notification-container" style="position: relative; margin-right: 1.5rem;">
+                        <div id="notificationBell" class="notification-bell" title="Notifications">
+                            <i class="ph-duotone ph-bell"></i>
+                            <span id="notifBadge" class="notif-badge hidden">0</span>
+                        </div>
+                        <div id="notifDropdown" class="notif-dropdown hidden">
+                            <div class="notif-header">
+                                <h3>Notifications</h3>
+                            </div>
+                            <div id="notifList" class="notif-list">
+                                <!-- Notifications injected here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div id="walletBadge" class="sync-badge wallet-badge" title="Virtual Wallet Balance" onclick="window.openWalletModal()">
+                        <i class="ph ph-wallet"></i><span id="walletValue">₹100,000</span>
+                    </div>
+                    <div id="syncBadge" class="sync-badge sync-synced" title="Google Drive Sync Status">
+                        <i class="ph ph-check-circle"></i><span>Synced</span>
+                    </div>
+                    <div class="user-greeting">
+                        <span id="headerGreetingText">Hello, User!</span>
+                        <span id="headerRoleBadge" class="user-role-badge">Seller</span>
+                    </div>
+                </div>
+            </header>
+
+            <div id="advancedFiltersPanel" class="surface-panel" style="padding: 1.5rem; border-bottom: 1px solid var(--border-color); display: none;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+                    <div>
+                        <label style="font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 0.5rem;">Amenities</label>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                            <label style="font-size: 0.85rem;"><input type="checkbox" class="filter-amenity" value="Furnished"> Furnished</label>
+                            <label style="font-size: 0.85rem;"><input type="checkbox" class="filter-amenity" value="Pool"> Pool</label>
+                            <label style="font-size: 0.85rem;"><input type="checkbox" class="filter-amenity" value="Gym"> Gym</label>
+                            <label style="font-size: 0.85rem;"><input type="checkbox" class="filter-amenity" value="Parking"> Parking</label>
+                            <label style="font-size: 0.85rem;"><input type="checkbox" class="filter-amenity" value="PetFriendly"> Pet Friendly</label>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 0.5rem;">Price Range</label>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="number" id="filterPriceMin" placeholder="Min (₹)" style="width: 100%; padding: 0.5rem; font-size: 0.85rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                            <input type="number" id="filterPriceMax" placeholder="Max (₹)" style="width: 100%; padding: 0.5rem; font-size: 0.85rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm);">
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem; text-align: right;">
+                    <button class="btn btn-secondary btn-sm" onclick="window.clearAdvancedFilters()" style="margin-right: 0.5rem;">Clear Filters</button>
+                    <button class="btn btn-primary btn-sm" onclick="window.applyAdvancedFilters()">Apply Filters</button>
+                </div>
+            </div>
+
+            <!-- Main Views Container — properties grid/map are injected here by renderProperties() -->
+            <div id="viewContainer" class="view-content"></div>
+
+            <!-- Comparison UI moved to bottom of body for better z-indexing -->
+            
+            <!-- Mobile Add Property FAB -->
+            <button class="btn btn-primary shadow-lg admin-only" id="mobileAddBtn" style="position: fixed; bottom: 2rem; right: 2rem; width: 60px; height: 60px; border-radius: 50%; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; z-index: 999; box-shadow: 0 10px 25px -5px rgba(234, 88, 12, 0.4);">
+                <i class="ph ph-plus"></i>
+            </button>
+        </main>
+    </div>
+
+    <!-- Data Injection Modal Form (Used strictly by Owners) -->
+    <div class="modal-overlay" id="propertyModal">
+        <div class="modal surface-panel">
+            <div class="modal-header">
+                <h3 id="modalTitle">Add New Listing</h3>
+                <button class="close-btn" id="closeModalBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="propertyForm">
+                    <input type="hidden" id="propId">
+                    <input type="hidden" id="propImage">
+                    
+                    <div class="image-upload-area" style="margin-bottom: 1.5rem;">
+                        <label>Property Photos (Max 5)</label>
+                        <label style="position: relative; margin-top: 0.5rem; display: block; cursor: pointer;">
+                            <input type="file" id="propImageFile" accept="image/*" multiple style="display: none;">
+                            <div style="border: 2px dashed var(--border-color); border-radius: var(--radius-sm); padding: 1.5rem; text-align: center; background: var(--bg-hover); color: var(--text-muted); transition: all 0.2s;">
+                                <i class="ph-duotone ph-upload-simple" style="font-size: 2rem; color: var(--primary); margin-bottom: 0.5rem;"></i>
+                                <div style="font-weight: 500; color: var(--text-main);">Click or Drag photos here</div>
+                                <div style="font-size: 0.8rem;">Supports JPG, PNG (Max 5MB each)</div>
+                            </div>
+                        </label>
+                        <div id="imagePreviewContainer" style="display: none; margin-top: 1rem; border-radius: var(--radius-sm); overflow-x: auto; white-space: nowrap; height: 100px; gap: 10px; padding: 0.5rem; background: var(--bg-hover);">
+                            <!-- Previews injected here -->
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Listing Title</label>
+                        <input type="text" id="propTitle" required placeholder="e.g. Luxury Sea-facing Penthouse" maxlength="100">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Project / Society Name</label>
+                        <input type="text" id="propProjectName" placeholder="e.g. Mantri Serenity or Hiranandani Estate" maxlength="100">
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Property Category</label>
+                            <select id="propCategory" required></select>
+                            <input type="text" id="propCategoryCustom" placeholder="Describe category (e.g. Farmhouse)" style="display: none; margin-top: 0.5rem;" maxlength="50">
+                        </div>
+                        <div class="form-group half">
+                            <label>Property Type</label>
+                            <select id="propType" required></select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Status</label>
+                            <select id="propStatus" required></select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>BHK Layout</label>
+                            <select id="propBhk" required></select>
+                        </div>
+                        <div class="form-group half">
+                            <label>Area (Sq.Ft.)</label>
+                            <input type="number" id="propArea" required placeholder="1500" min="100">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Value (₹)</label>
+                            <input type="number" id="propPrice" required placeholder="e.g. 5000000">
+                        </div>
+                        <div class="form-group half">
+                            <label>City Region</label>
+                            <input type="text" id="propCity" required list="citiesList" placeholder="e.g. Mumbai">
+                            <datalist id="citiesList"></datalist>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label>Full Address</label>
+                            <input type="text" id="propAddress" required placeholder="e.g. 10 Marine Drive" maxlength="200">
+                        </div>
+                        <div class="form-group half">
+                            <label>Area PIN Code <span style="color: var(--danger); font-size: 0.8rem;">*required</span></label>
+                            <input type="text" id="propPinCode" required placeholder="e.g. 400020" maxlength="6" pattern="[0-9]{6}" title="Enter a valid 6-digit PIN code">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Property Location Coordinates <span style="color: var(--danger); font-size: 0.8rem;">*required</span></label>
+                        <div style="display: flex; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap;">
+                            <input type="number" id="propLat" required step="any" placeholder="Latitude (e.g. 19.0760)" style="flex: 1; min-width: 140px;">
+                            <input type="number" id="propLng" required step="any" placeholder="Longitude (e.g. 72.8777)" style="flex: 1; min-width: 140px;">
+                            <button type="button" id="useMyLocationBtn" class="btn btn-secondary shadow-hover" style="white-space: nowrap; flex-shrink: 0;" title="Auto-fill from your current GPS position">
+                                <i class="ph ph-map-pin"></i> Use My Location
+                            </button>
+                        </div>
+                        <div id="locationHelpText" style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="ph ph-magnifying-glass"></i>
+                            <span>Search for a place (e.g., 'Bandra West, Mumbai') or paste a Maps link:</span>
+                        </div>
+                        <div style="position: relative;">
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                                <input type="text" id="propLocationSearch" placeholder="Type a location to search..." style="flex: 1; font-size: 0.85rem;" autocomplete="off">
+                                <button type="button" id="searchLocationBtn" class="btn btn-secondary shadow-hover" style="white-space: nowrap;">Search</button>
+                            </div>
+                            <ul id="locationSuggestions" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-sm); max-height: 250px; overflow-y: auto; z-index: 1000; list-style: none; padding: 0; margin-top: 4px; box-shadow: var(--shadow-md);"></ul>
+                        </div>
+                        <div style="margin-top: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 500;">
+                                <i class="ph ph-map-trifold" style="color: var(--primary);"></i>
+                                <span>Or <strong style="color: var(--primary);">click the map</strong> to pin the location — then drag the marker to fine-tune</span>
+                            </div>
+                            <div id="modalMap" style="height: 260px; width: 100%; border-radius: var(--radius-sm); border: 2px solid var(--border-color); z-index: 1; background-color: var(--bg-hover); transition: border-color 0.2s;" onmouseenter="this.style.borderColor='var(--primary)'" onmouseleave="this.style.borderColor='var(--border-color)'"></div>
+                        </div>
+                    </div>
+
+                    <div class="form-section-divider" style="margin: 2rem 0 1rem 0; border-top: 2px dashed var(--border-color); padding-top: 1rem;">
+                        <span style="font-weight: 700; color: var(--primary);"><i class="ph ph-gavel"></i> Bidding Options</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; background: var(--bg-hover); padding: 0.75rem; border-radius: var(--radius-sm);">
+                            <input type="checkbox" id="propBiddingEnabled" style="width: 20px; height: 20px;">
+                            <span style="font-weight: 600;">Enable Auction / Bidding for this property</span>
+                        </label>
+                    </div>
+
+                    <div id="biddingFields" style="display: none; background: var(--bg-hover); padding: 1.5rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 1.5rem;">
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>Auction Start Time</label>
+                                <input type="datetime-local" id="propBidStart">
+                            </div>
+                            <div class="form-group half">
+                                <label>Auction End Time (Max 10 days)</label>
+                                <input type="datetime-local" id="propBidEnd">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>Minimum Bid Increment (₹)</label>
+                                <input type="number" id="propBidIncrement" value="10000" step="10000" min="10000">
+                            </div>
+                            <div class="form-group half">
+                                <label>Entry Fee (₹)</label>
+                                <input type="number" id="propBidEntryFee" value="5000" step="500" min="0">
+                            </div>
+                        </div>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0 0;">
+                            <i class="ph ph-info"></i> Base price will be the "Value" set above. Bids must be in multiples of 10,000.
+                        </p>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 1.5rem;">
+                        <label>Amenities & Features</label>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; background: var(--bg-hover); padding: 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="Furnished"> Furnished</label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="Pool"> Swimming Pool</label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="Gym"> Gymnasium</label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="Parking"> Reserved Parking</label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="Security"> 24/7 Security</label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem;"><input type="checkbox" name="propAmenity" value="PetFriendly"> Pet Friendly</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Property Description & Keywords</label>
+                        <textarea id="propDescription" rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention amenities (Pool, Gym), nearby landmarks, or special features for better search discovery..." maxlength="2000"></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" id="cancelModalBtn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Property</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Compare Tray -->
+    <div id="compareTray" class="compare-tray">
+        <div style="display: flex; flex-direction: column;">
+            <span style="font-weight: 700; color: white;">Compare Properties</span>
+            <span style="font-size: 0.8rem; color: rgba(255,255,255,0.6);"><span id="compareCount">0</span> Selected</span>
+        </div>
+        <div id="compareListTray" style="display: flex; gap: 0.5rem; align-items: center;"></div>
+        <button class="btn btn-primary shadow-hover" onclick="window.renderComparisonTable()" style="white-space: nowrap;">Compare Now</button>
+    </div>
+    
+    <!-- Added: Full Bid History Modal -->
+    <div class="modal-overlay" id="bidHistoryModal">
+        <div class="modal surface-panel" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>Full Bid History</h3>
+                <button class="close-btn" onclick="document.getElementById('bidHistoryModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="fullBidHistoryList" style="display: flex; flex-direction: column; gap: 1rem; max-height: 500px; overflow-y: auto;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Comparison Table Modal -->
+    <div class="modal-overlay" id="compareModal">
+        <div class="modal surface-panel" style="max-width: 900px; width: 95%;">
+            <div class="modal-header">
+                <div>
+                    <h3>Property Comparison</h3>
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Side-by-side analysis</p>
+                </div>
+                <button class="close-btn" id="closeCompareBtn" onclick="document.getElementById('compareModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 0; overflow-x: auto; background: var(--bg-main);">
+                <div id="comparisonTableContainer" style="min-width: 600px; padding: 1.5rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inquiry Generation Modal (Buyers Only) -->
+    <div class="modal-overlay" id="inquiryModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Contact Seller</h3>
+                <button class="close-btn" id="closeInquiryBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="inquiryForm">
+                    <input type="hidden" id="inqPropertyId">
+                    <input type="hidden" id="inqOwnerId">
+                    <input type="hidden" id="inqPropertyTitle">
+                    
+                    <div class="form-group" style="margin-bottom: 2rem; background: var(--bg-main); padding: 1rem; border-radius: var(--radius-sm);">
+                        <p style="margin: 0; font-size: 0.9rem; color: var(--text-muted);">Inquiring about:</p>
+                        <strong id="inqPropNameDisplay" style="color: var(--primary);">Property Title</strong>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Your Message</label>
+                        <textarea id="inqMessage" required rows="5" style="width: 100%; resize: vertical; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.95rem; line-height: 1.5;" placeholder="Hi, I'm highly interested in scheduling a viewing for this property..."></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover">Send Secure Message <i class="ph ph-paper-plane-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reply Modal -->
+    <div class="modal-overlay" id="replyModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Send Reply</h3>
+                <button class="close-btn" id="closeReplyBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="replyForm">
+                    <input type="hidden" id="replyInqId">
+                    
+                    <div style="margin-bottom: 1.25rem; background: var(--bg-hover); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); font-size: 0.9rem;">
+                        <span style="color: var(--text-muted);">Replying to:</span> 
+                        <strong id="replyTargetName" style="color: var(--primary);">User</strong>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Your Message</label>
+                        <textarea id="replyMessage" required rows="4" style="width: 100%; resize: vertical; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-family: inherit; font-size: 0.95rem; line-height: 1.5;" placeholder="Write your reply..."></textarea>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover">Send Reply <i class="ph ph-paper-plane-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ratings & Reviews Modal -->
+    <div class="modal-overlay" id="reviewModal">
+        <div class="modal surface-panel" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>Ratings & Reviews</h3>
+                <button class="close-btn" id="closeReviewBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="reviewList" style="margin-bottom: 2rem; max-height: 350px; overflow-y: auto; padding-right: 0.5rem;"></div>
+                
+                <h4 style="margin-bottom: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem; color: var(--text-main);">Rate this Property</h4>
+                <form id="reviewForm">
+                    <input type="hidden" id="revPropertyId">
+                    <div class="form-group">
+                        <label>Your Quality Rating</label>
+                        <div class="star-rating" id="starInput" style="display: flex; gap: 0.75rem; font-size: 2rem; color: #fbbf24; cursor: pointer; margin: 0.5rem 0 1.5rem 0;">
+                            <i class="ph ph-star active" data-value="1"></i>
+                            <i class="ph ph-star active" data-value="2"></i>
+                            <i class="ph ph-star active" data-value="3"></i>
+                            <i class="ph ph-star active" data-value="4"></i>
+                            <i class="ph ph-star active" data-value="5"></i>
+                        </div>
+                        <input type="hidden" id="revRating" required value="5">
+                    </div>
+                    <div class="form-group">
+                        <label>Share your experience</label>
+                        <textarea id="revComment" required rows="4" style="width: 100%; padding: 1rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.95rem;" placeholder="Mention the location vibe, house condition, or neighborhood..."></textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1rem;">Submit Review <i class="ph ph-star-half-tilt"></i></button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Property Details Modal -->
+    <div class="modal-overlay" id="propertyDetailsModal">
+        <div class="modal surface-panel" style="max-width: 800px; width: 95%;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="detailsTitle" style="font-size: 1.5rem; margin-bottom: 0.25rem;">Property Name</h3>
+                    <p id="detailsLocation" style="font-size: 0.95rem; color: var(--text-muted); margin: 0;"><i class="ph ph-map-pin"></i> Location</p>
+                </div>
+                <button class="close-btn" onclick="window.closePropertyDetailsModal()"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
+                <div id="detailsImageCarousel" style="margin-bottom: 1.5rem; border-radius: var(--radius-md); overflow: hidden; background: var(--bg-hover);">
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+                    <div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Property Details</h4>
+                        <div id="detailsMetrics" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.95rem;">
+                        </div>
+                    </div>
+                    <div>
+                        <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Listed By</h4>
+                        <div id="detailsLister" style="display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; background: var(--bg-hover); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 2rem;">
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Description</h4>
+                    <p id="detailsDescription" style="line-height: 1.6; color: var(--text-muted); white-space: pre-wrap; font-size: 0.95rem;"></p>
+                </div>
+                
+
+                
+                <div style="margin-bottom: 2rem;">
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Location & Neighborhood</h4>
+                    <div id="detailsMap" style="width: 100%; height: 300px; border-radius: var(--radius-md); background: var(--bg-hover); margin-bottom: 1.5rem; position: relative;">
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--text-muted); font-size: 0.9rem;">
+                            <i class="ph ph-spinner ph-spin" style="font-size: 1.5rem; display: block; margin: 0 auto 0.5rem;"></i>
+                            Loading interactive map...
+                        </div>
+                    </div>
+                    <div id="detailsPoiContainer" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        <!-- POIs like Schools, Hospitals, Transit will be injected here -->
+                    </div>
+                </div>
+
+                <div id="emiCalculatorSection" style="margin-bottom: 2rem;">
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Financial Tools</h4>
+                    <div style="background: var(--bg-hover); padding: 1.5rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                        <h4 style="font-size: 1rem; margin-bottom: 1.25rem; color: var(--text-main); display: flex; align-items: center; gap: 0.5rem;"><i class="ph-duotone ph-calculator" style="color: var(--primary);"></i> Mortgage / EMI</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="font-size: 0.75rem;">Price (₹)</label>
+                                <input type="number" id="calcPrice" value="0" readonly style="background: var(--bg-main); color: var(--text-muted); font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size: 0.75rem;">Down Payment (₹)</label>
+                                <input type="number" id="calcDownPayment" value="0" min="0" style="font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size: 0.75rem;">Interest Rate (%)</label>
+                                <input type="number" id="calcInterestRate" value="8.5" step="0.1" min="1" max="20" style="font-size: 0.85rem;">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size: 0.75rem;">Tenure (Years)</label>
+                                <input type="number" id="calcTenure" value="20" min="1" max="30" style="font-size: 0.85rem;">
+                            </div>
+                        </div>
+                        <div style="border-top: 1px dashed var(--border-color); padding-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span style="font-size: 0.8rem; color: var(--text-muted);">Est. Monthly EMI</span>
+                                <h4 id="calcEmiResult" style="color: var(--primary); margin: 0;">₹0</h4>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="window.calculateEMI()">Update</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h4 style="font-size: 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; color: var(--text-main);">Previous Ratings</h4>
+                    <div id="detailsRatingsContainer">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.5rem; border-top: 1px solid var(--border-color);">
+               <div id="detailsPrice" style="font-size: 1.5rem; font-weight: 700; color: var(--primary);"></div>
+               <div id="detailsActionBtns" style="display: flex; gap: 0.5rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Price History Trend Modal -->
+    <div class="modal-overlay" id="priceModal">
+        <div class="modal surface-panel" style="max-width: 700px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Price Trends</h3>
+                    <p id="priceModalTitle" style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Property Insights</p>
+                </div>
+                <button class="close-btn" id="closePriceBtn"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div style="height: 350px; position: relative;">
+                    <canvas id="priceTrendChart"></canvas>
+                </div>
+                <div id="priceInfo" style="margin-top: 2rem; padding: 1rem; background: var(--bg-main); border-radius: var(--radius-sm); font-size: 0.85rem; color: var(--text-muted);">
+                    <i class="ph ph-info"></i> Historical data based on listed price updates on Estato.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bidding / Auction Modal -->
+    <div class="modal-overlay" id="bidModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Place Your Bid</h3>
+                    <p id="bidPropTitle" style="font-size: 0.9rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">Property Name</p>
+                </div>
+                <button class="close-btn" onclick="document.getElementById('bidModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="bidStatusContainer" style="margin-bottom: 1.5rem; padding: 1.25rem; border-radius: var(--radius-sm); background: var(--bg-hover); border: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span style="color: var(--text-muted);">Current Highest Bid</span>
+                        <strong id="currentHighBid" style="color: var(--primary); font-size: 1.25rem;">₹0</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: var(--text-muted);">Time Remaining</span>
+                        <strong id="bidTimeLeft" style="color: var(--danger);">00:00:00</strong>
+                    </div>
+                </div>
+
+                <div id="feePaymentSection" class="hidden" style="text-align: center; padding: 1rem;">
+                    <p style="margin-bottom: 1.5rem; font-size: 0.95rem; line-height: 1.6;">You must pay a one-time entry fee to participate in this auction.</p>
+                    <div style="background: var(--bg-main); padding: 1rem; border-radius: var(--radius-sm); margin-bottom: 1.5rem; border: 1px dashed var(--border-color);">
+                        <small style="display: block; color: var(--text-muted); margin-bottom: 0.25rem;">Entry Fee Amount</small>
+                        <strong id="bidEntryFeeAmount" style="font-size: 1.5rem; color: var(--text-main);">₹5,000</strong>
+                    </div>
+                    <button class="btn btn-primary w-full shadow-hover" id="payFeeBtn" style="padding: 1rem;">
+                        <i class="ph ph-credit-card"></i> Pay Entry Fee & Join
+                    </button>
+                </div>
+
+                <div id="bidPlacementSection" class="hidden">
+                    <form id="bidForm">
+                        <input type="hidden" id="bidPropertyId">
+                        <div class="form-group">
+                            <label>Your Bid Amount</label>
+                            <input type="number" id="bidAmountInput" required step="1" min="1" style="font-size: 1.25rem; padding: 1rem; text-align: center; border: 2px solid var(--primary);">
+                            
+                            <div id="bidSuggestions" style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; flex-wrap: wrap;">
+                                <!-- Suggestions injected here -->
+                            </div>
+
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.75rem; text-align: center;">
+                                Minimum next bid: <span id="minNextBid" style="font-weight: 700;">₹0</span>
+                            </p>
+                        </div>
+                        <div class="modal-footer" style="padding: 1.5rem 0 0 0; border: none;">
+                            <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1.25rem; font-size: 1.1rem;">
+                                <i class="ph ph-gavel"></i> Confirm Bid
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div id="bidHistorySection" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h4 style="font-size: 0.9rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Bid History</h4>
+                        <span id="bidCountBadge" class="badge" style="background: var(--bg-hover); color: var(--text-muted); padding: 0.2rem 0.6rem; border-radius: 10px; font-size: 0.75rem;">0 Bids</span>
+                    </div>
+                    <div id="bidHistoryTimeline" style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                        <!-- Timeline entries injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Broker Verification Modal -->
+    <div class="modal-overlay" id="brokerVerificationModal">
+        <div class="modal surface-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>Broker Verification</h3>
+                <button class="close-btn" onclick="document.getElementById('brokerVerificationModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="brokerVerificationForm">
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1.5rem;">
+                        To receive your "Verified Broker" badge, please provide your official government-issued license details. Our admin team will review your application within 24-48 hours.
+                    </p>
+                    <div class="form-group">
+                        <label>RERA Number / License ID</label>
+                        <input type="text" id="brokerLicense" required placeholder="e.g. PRM/KA/RERA/1251/..." maxlength="50">
+                    </div>
+                    <div class="form-group">
+                        <label>Official Agency Name</label>
+                        <input type="text" id="brokerAgency" required placeholder="e.g. Elite Realty Group" maxlength="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Years of Experience</label>
+                        <input type="number" id="brokerExperience" required placeholder="5" min="0" max="60">
+                    </div>
+                    <div class="modal-footer" style="padding: 1.5rem 0 0 0; border: none;">
+                        <button type="submit" class="btn btn-primary w-full shadow-hover" style="padding: 1rem;">
+                            Submit Verification <i class="ph ph-shield-check"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Wallet / Top-up Modal -->
+    <div class="modal-overlay" id="walletModal">
+        <div class="modal surface-panel" style="max-width: 460px;">
+            <div class="modal-header">
+                <h3>Virtual Wallet</h3>
+                <button class="close-btn" onclick="document.getElementById('walletModal').classList.remove('active')"><i class="ph ph-x"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem;">
+                <!-- Balance Header -->
+                <div style="text-align: center; margin-bottom: 1.5rem; padding: 1.25rem; background: linear-gradient(135deg, var(--primary), #c2410c); border-radius: var(--radius-md); color: white;">
+                    <div style="font-size: 1.75rem; margin-bottom: 0.4rem; opacity: 0.85;"><i class="ph-duotone ph-wallet"></i></div>
+                    <p style="margin-bottom: 0.25rem; opacity: 0.8; font-size: 0.85rem;">Current Balance</p>
+                    <h2 id="walletBalanceDisplay" style="font-size: 2rem; font-weight: 800; margin: 0; color: white;">₹100,000</h2>
+                </div>
+                <!-- Tabs -->
+                <div style="display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 1.25rem;">
+                    <button id="walletTabTopup" onclick="window.switchWalletTab('topup')" style="flex:1; padding: 0.6rem; border: none; background: none; font-weight: 700; font-size: 0.9rem; cursor: pointer; color: var(--primary); border-bottom: 3px solid var(--primary); margin-bottom: -2px; transition: all 0.2s;">
+                        <i class="ph ph-plus-circle"></i> Top-up
+                    </button>
+                    <button id="walletTabHistory" onclick="window.switchWalletTab('history')" style="flex:1; padding: 0.6rem; border: none; background: none; font-weight: 700; font-size: 0.9rem; cursor: pointer; color: var(--text-muted); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.2s;">
+                        <i class="ph ph-clock-clockwise"></i> History
+                    </button>
+                </div>
+                <!-- Top-up Panel -->
+                <div id="walletPanelTopup">
+                    <div style="background: var(--bg-hover); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 1rem;">
+                        <h4 style="margin-bottom: 1rem; font-size: 0.9rem;">Quick Add (Simulation)</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;">
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="10000">+ ₹10,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="50000">+ ₹50,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="100000">+ ₹1,00,000</button>
+                            <button class="btn btn-secondary shadow-hover add-funds-btn" data-amount="500000">+ ₹5,00,000</button>
+                        </div>
+                    </div>
+                    <div style="padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">Or enter a custom amount:</p>
+                        <div style="display: flex; gap: 0.75rem;">
+                            <input type="number" id="customAmountInput" placeholder="Amount (multiples of 1000)" style="flex: 1; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.9rem;">
+                            <button class="btn btn-primary" id="addCustomFundsBtn">Add Funds</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Transaction History Panel -->
+                <div id="walletPanelHistory" style="display: none;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">Last 50 transactions</span>
+                        <span id="txCountBadge" style="font-size: 0.75rem; color: var(--text-muted); background: var(--bg-hover); padding: 0.2rem 0.6rem; border-radius: 10px; border: 1px solid var(--border-color);">Loading...</span>
+                    </div>
+                    <div id="walletTransactionList" style="max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+                        <p style="text-align: center; color: var(--text-muted); font-size: 0.85rem; padding: 2rem 0;"><i class="ph ph-spinner ph-spin"></i> Loading...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <!-- Firebase SDK (Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-storage-compat.js"></script>
+    
+    <!-- html2canvas for Property Flyer PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- jsPDF + autoTable for PDF/CSV export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <script src="/js/config.js"></script>
+    <script type="module" src="/js/modules/main.js?v=12.9"></script>
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.log('SW registration failed:', err));
+            });
+        }
+    </script>
+
+    <!-- Mobile Sidebar Toggle -->
+    <script>
+        (function () {
+            const menuBtn = document.getElementById('mobileMenuBtn');
+            const sidebar = document.getElementById('mainSidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            }
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+
+            if (menuBtn) menuBtn.addEventListener('click', openSidebar);
+            if (overlay) overlay.addEventListener('click', closeSidebar);
+
+            // Close sidebar when a nav item is tapped on mobile
+            document.addEventListener('click', function (e) {
+                const navItem = e.target.closest('.nav-item');
+                if (navItem && window.innerWidth <= 768) {
+                    closeSidebar();
+                }
+            });
+        })();
+    </script>
+</body>
+</html>

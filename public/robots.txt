@@ -1,0 +1,13 @@
+# Estato V12.1 — robots.txt
+User-agent: *
+Allow: /
+Allow: /property/
+Disallow: /api/
+Disallow: /api/audit
+Disallow: /api/make-admin
+
+# Crawl-delay for polite bots
+Crawl-delay: 1
+
+Sitemap: https://estatemarket.web.app/sitemap-index.xml
+Sitemap: https://estatemarket.web.app/sitemap.xml
