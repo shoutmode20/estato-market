@@ -46,7 +46,7 @@ if (!fs.existsSync(distDir)) {
         }
 
         const filesToCopy = ['index.html', 'manifest.json', 'sw.js', 'robots.txt'];
-        const dirsToCopy = ['css', 'js', 'assets', 'dist'];
+        const dirsToCopy = ['css', 'assets', 'dist'];
 
         for (const file of filesToCopy) {
             if (fs.existsSync(path.join(__dirname, file))) {
@@ -72,6 +72,22 @@ if (!fs.existsSync(distDir)) {
         for (const dir of dirsToCopy) {
             copyDirRecursive(path.join(__dirname, dir), path.join(publicDir, dir));
         }
+
+        // Explicitly only copy config.js (do not expose raw js modules)
+        const publicJsDir = path.join(publicDir, 'js');
+        if (!fs.existsSync(publicJsDir)) fs.mkdirSync(publicJsDir, { recursive: true });
+        if (fs.existsSync(path.join(__dirname, 'js/config.js'))) {
+            fs.copyFileSync(path.join(__dirname, 'js/config.js'), path.join(publicJsDir, 'config.js'));
+        }
+
+        // Overwrite public/index.html to use the minified production bundle
+        const indexPath = path.join(publicDir, 'index.html');
+        if (fs.existsSync(indexPath)) {
+            let html = fs.readFileSync(indexPath, 'utf-8');
+            html = html.replace(/<script type="module" src="\/js\/modules\/main\.js[^>]*><\/script>/, '<script defer src="/dist/bundle.min.js"></script>');
+            fs.writeFileSync(indexPath, html);
+        }
+
         console.log('✅ Build fully complete and ready for deployment in public/');
 
     } catch (err) {
