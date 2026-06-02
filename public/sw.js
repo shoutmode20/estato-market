@@ -1,26 +1,23 @@
-const CACHE_NAME = 'estato-v15.0';
+const CACHE_NAME = 'estato-v16.0';
+const IMG_CACHE_NAME = 'estato-images-v1';
 const ASSETS = [
     './',
     './index.html',
     './css/styles.css',
     './js/config.js',
-    './js/modules/main.js',
-    './js/modules/services/storage.js',
-    './js/modules/ui/map-engine.js',
-    './js/modules/ui/property-card.js',
-    './js/modules/ui/dashboard.js',
-    './js/modules/ui/forms.js',
-    './js/modules/ui/messaging.js',
-    './js/modules/ui/utils.js',
-    './js/modules/core/state.js',
     './assets/icons/icon-192.png',
     './assets/icons/icon-512.png',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'
+    './dist/auctions-5U2BI5PZ.js',
+    './dist/bundle.min.js',
+    './dist/chunk-JEB5J5IO.js',
+    './dist/chunk-WD42TXT6.js',
+    './dist/crm-YETSDAY6.js',
+    './dist/dashboard-H4HIVRPR.js',
+    './dist/main.js',
+    './dist/messaging-SPBI5MS2.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -31,23 +28,67 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys().then((keys) => {
-            return Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)));
+            return Promise.all(
+                keys.filter(key => key !== CACHE_NAME && key !== IMG_CACHE_NAME)
+                    .map(key => caches.delete(key))
+            );
         })
     );
 });
 
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
-    
-    // STRICT BYPASS: Only cache GET requests from our own origin
-    // This ensures POST uploads and ALL external APIs (Google Drive, Nominatim Location Search, Unsplash) go through Network
-    if (event.request.method !== 'GET' || url.origin !== location.origin) {
-        return; 
+
+    // Only handle GET requests
+    if (event.request.method !== 'GET') return;
+
+    // ── Cross-origin image caching (Google Drive, Unsplash, etc.) ──
+    // Use stale-while-revalidate: serve cached image instantly, then update cache in background
+    const isImage = event.request.destination === 'image'
+        || /\.(jpg|jpeg|png|gif|webp|svg|avif)(\?|$)/i.test(url.pathname)
+        || url.hostname.includes('googleusercontent.com')
+        || url.hostname.includes('drive.google.com')
+        || url.hostname.includes('unsplash.com');
+
+    if (isImage && url.origin !== location.origin) {
+        event.respondWith(
+            caches.open(IMG_CACHE_NAME).then(async (cache) => {
+                const cached = await cache.match(event.request);
+                const fetchPromise = fetch(event.request).then((networkResponse) => {
+                    if (networkResponse && networkResponse.ok) {
+                        cache.put(event.request, networkResponse.clone());
+                    }
+                    return networkResponse;
+                }).catch(() => cached); // If network fails, fall back to cache
+
+                return cached || fetchPromise;
+            })
+        );
+        return;
     }
 
+    // ── Same-origin: Cache-first for static assets ──
+    if (url.origin === location.origin) {
+        event.respondWith(
+            caches.match(event.request).then((res) => {
+                return res || fetch(event.request);
+            })
+        );
+        return;
+    }
+
+    // ── Other cross-origin (CDN scripts, fonts): Stale-while-revalidate ──
     event.respondWith(
-        caches.match(event.request).then((res) => {
-            return res || fetch(event.request);
+        caches.open(CACHE_NAME).then(async (cache) => {
+            const cached = await cache.match(event.request);
+            const fetchPromise = fetch(event.request).then((response) => {
+                if (response && response.ok) {
+                    cache.put(event.request, response.clone());
+                }
+                return response;
+            }).catch(() => cached);
+
+            return cached || fetchPromise;
         })
     );
 });

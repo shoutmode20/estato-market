@@ -10,10 +10,11 @@ import {
     generatePropertyCard as coreGenerateCard, sortProperties, filterByRole, applyFilters,
     getSimilarProperties as coreSimilarProps, PROPERTY_METADATA
 } from './ui/property-card.js';
-import { renderDashboard as externalRenderDashboard } from './ui/dashboard.js';
-import { renderMessages as externalRenderMessages } from './ui/messaging.js';
-import { renderAuctions as externalRenderAuctions } from './ui/auctions.js';
-import { renderCRM as externalRenderCRM } from './ui/crm.js';
+// Dynamic imports — loaded on-demand for code splitting
+const loadDashboard = () => import('./ui/dashboard.js');
+const loadMessaging = () => import('./ui/messaging.js');
+const loadAuctions  = () => import('./ui/auctions.js');
+const loadCRM       = () => import('./ui/crm.js');
 import { initForms } from './ui/forms.js';
 
 /* Estato V12.1 - Production - SEO & Pagination Enabled */
@@ -135,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentCategoryFilter = '';
         
         window.setActiveNav('properties');
-        searchInput.value = 'My Listings';
+        if (searchInput) searchInput.value = 'My Listings';
         renderView('properties', 'My Listings');
         window.scrollTo(0, 0);
     };
@@ -741,34 +742,41 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Initializing App flow...");
         setupAuthListeners();
 
-        // 0. INSTANT UI HYDRATION
-        // Load data from persistent cache first so the UI can render immediately
-        const cachedUser = await EstatoStorage.checkAuth();
-        if (cachedUser) {
-            console.log("[Estato] Hydrating UI instantly from cache...");
-            checkAuth();
-        }
-
-        // 1. Initialize GIS & Drive Engine
         try {
-            await EstatoStorage.initDrive(updateSyncBadge);
-            console.log("Drive Engine Initialized.");
-        } catch (err) {
-            console.error("Drive Engine Init Failed:", err);
-            loginErrorMsg.textContent = "Sync Error: Could not connect to Google.";
-        }
-
-        // 2. Try silent/cached login to bypass screen if already connected in this session
-        try {
-            const ok = await EstatoStorage.loginWithGoogle(null, true); // silent = true
-            if (ok) {
-                if (!cachedUser) checkAuth();
-                return;
+            // 0. INSTANT UI HYDRATION
+            // Load data from persistent cache first so the UI can render immediately
+            const cachedUser = await EstatoStorage.checkAuth();
+            if (cachedUser) {
+                console.log("[Estato] Hydrating UI instantly from cache...");
+                checkAuth();
             }
-        } catch(e) {}
 
-        // 3. Fallback to Guest Mode instead of login screen
-        if (!cachedUser) checkAuth();
+            // 1. Initialize GIS & Drive Engine
+            try {
+                await EstatoStorage.initDrive(updateSyncBadge);
+                console.log("Drive Engine Initialized.");
+            } catch (err) {
+                console.error("Drive Engine Init Failed:", err);
+                if (loginErrorMsg) loginErrorMsg.textContent = "Sync Error: Could not connect to Google.";
+            }
+
+            // 2. Try silent/cached login to bypass screen if already connected in this session
+            try {
+                const ok = await EstatoStorage.loginWithGoogle(null, true); // silent = true
+                if (ok) {
+                    if (!cachedUser) checkAuth();
+                    return;
+                }
+            } catch(e) {}
+
+            // 3. Fallback to Guest Mode instead of login screen
+            if (!cachedUser) checkAuth();
+        } catch (err) {
+            console.error("Critical Init Error:", err);
+        } finally {
+            // Final fallback to ensure user isn't stuck on loading screen
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        }
     }
 
     // --- AUTHENTICATION ENGINE ---
@@ -1139,11 +1147,28 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (mapBtn) {
                 e.preventDefault();
-                window.toggleMapView(true);
+                isMapVisible = true; // Sync local main.js state
+                toggleMapView(true, { 
+                    filterCity: currentFilterCity, 
+                    currentView: 'properties',
+                    onInitMap: () => initMap(currentFilterCity),
+                    onUpdateMarkers: () => updateMapMarkers(
+                        EstatoStorage.getProperties(), 
+                        currentFilterCity, 
+                        currentRadiusCenter, 
+                        currentRadiusKm, 
+                        window.dispatchCardClick, 
+                        (val) => currencyFormatter.format(val), 
+                        window.formatEstatoImage
+                    )
+                });
+                renderView('properties', searchInput ? searchInput.value : '');
             }
             if (gridBtn) {
                 e.preventDefault();
-                window.toggleMapView(false);
+                isMapVisible = false; // Sync local main.js state
+                toggleMapView(false, { currentView: 'properties' });
+                renderView('properties', searchInput ? searchInput.value : '');
             }
         });
 
@@ -1841,7 +1866,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'dashboard': renderDashboard(); break;
             case 'cities': renderCities(); break;
             case 'messages': renderMessages(); break;
-            case 'crm': externalRenderCRM(viewContainer); break;
+            case 'crm': loadCRM().then(m => m.renderCRM(viewContainer)); break;
             case 'properties': renderProperties(currentFilterCity, searchQuery); break;
             case 'watchlist': renderSavedProperties(); break;
             case 'auctions': renderAuctions(); break;
@@ -2030,14 +2055,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!window.Chart) {
             await window.loadScript('https://cdn.jsdelivr.net/npm/chart.js');
         }
+        const { renderDashboard: externalRenderDashboard } = await loadDashboard();
         externalRenderDashboard({
             currentUser, EstatoStorage, viewContainer, dashboardCharts, currencyFormatter,
             generatePropertyCard, Chart: window.Chart, attachCardListeners,
             seedDummyData: window.seedDummyData, exportBackup, handleRestore, renderAdminActivityFeed
         });
     }
-    function renderAuctions() {
+    async function renderAuctions() {
         const viewContainer = document.getElementById('viewContainer');
+        const { renderAuctions: externalRenderAuctions } = await loadAuctions();
         externalRenderAuctions({
             currentUser, EstatoStorage, viewContainer, attachCardListeners,
             generatePropertyCard
@@ -2258,39 +2285,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let html = `
             ${(!cityFilter && !searchQuery && !currentRadiusCenter && !currentTypeFilter && !currentStatusFilter && !currentCategoryFilter) ? renderRecentlyViewed() : ''}
-            <div class="section-header" style="flex-direction: column; align-items: flex-start;">
-                <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:0.5rem;">
-                    <h2 style="margin:0;">${headerText}
+            <div class="section-header" style="flex-direction: column; align-items: flex-start; gap: 1rem;">
+                <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                    <h2 style="margin:0; font-size: 1.5rem; font-weight: 700; color: var(--text-main);">${headerText}
                         ${cityFilter ? `<button class="btn btn-secondary btn-sm" id="clearCityFilterBtn" style="margin-left: 1rem; padding: 0.25rem 0.75rem;"><i class="ph ph-x"></i> Clear Region</button>` : ''}
                     </h2>
-                    ${hasActiveSearch && currentUser ? `
-                    <button id="saveSearchBtn" class="btn btn-sm shadow-hover" style="background:${alreadySaved ? 'var(--bg-hover)' : 'var(--primary)'}; color:${alreadySaved ? 'var(--text-muted)' : 'white'}; font-size:0.8rem; white-space:nowrap;" onclick="window.toggleSaveSearch()">
-                        <i class="ph ph-${alreadySaved ? 'bell-slash' : 'bell'}"></i>
-                        ${alreadySaved ? 'Remove Alert' : 'Save Search & Get Alerts'}
-                    </button>` : ''}
+                    <div style="display: flex; align-items: center; gap: 1rem;">
+                        ${hasActiveSearch && currentUser ? `
+                        <button id="saveSearchBtn" class="btn btn-sm shadow-hover" style="background:${alreadySaved ? 'var(--bg-hover)' : 'var(--primary)'}; color:${alreadySaved ? 'var(--text-muted)' : 'white'}; font-size:0.8rem; height: 36px; padding: 0 1rem; border-radius: var(--radius-md);" onclick="window.toggleSaveSearch()">
+                            <i class="ph ph-${alreadySaved ? 'bell-slash' : 'bell'}"></i>
+                            ${alreadySaved ? 'Remove Alert' : 'Save Search & Get Alerts'}
+                        </button>` : ''}
+
+                        <!-- Segmented View Toggle (Right-aligned) -->
+                        <div class="view-toggle" style="display: flex; background: var(--bg-surface); padding: 3px; border-radius: 10px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm);">
+                            <button id="viewGridBtn" class="btn-sm ${!isMapVisible ? 'active' : ''}" title="Grid View" style="border:none; border-radius: 7px; padding: 0.5rem 0.75rem; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; background: ${!isMapVisible ? 'var(--primary)' : 'transparent'}; color: ${!isMapVisible ? 'white' : 'var(--text-muted)'};">
+                                <i class="ph ph-squares-four" style="font-size: 1.1rem;"></i>
+                            </button>
+                            <button id="viewMapBtn" class="btn-sm ${isMapVisible ? 'active' : ''}" title="Map View" style="border:none; border-radius: 7px; padding: 0.5rem 0.75rem; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; background: ${isMapVisible ? 'var(--primary)' : 'transparent'}; color: ${isMapVisible ? 'white' : 'var(--text-muted)'};">
+                                <i class="ph ph-map-trifold" style="font-size: 1.1rem;"></i>
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <div class="filters-toolbar">
-                    <select id="sortSelect">
-                        ${FILTER_CONFIG.sortOptions.map(opt => `<option value="${opt.value}" ${currentSort === opt.value ? 'selected' : ''}>Sort: ${opt.label}</option>`).join('')}
-                    </select>
-                    <select id="typeSelect">
-                        <option value="">Filter: All Types</option>
-                        ${FILTER_CONFIG.types.map(t => `<option value="${t}" ${currentTypeFilter === t ? 'selected' : ''}>${t}</option>`).join('')}
-                        <option value="Auction" ${currentTypeFilter === 'Auction' ? 'selected' : ''}>Auctions</option>
-                    </select>
-                    <select id="categorySelect">
-                        <option value="">Filter: All Categories</option>
-                        ${FILTER_CONFIG.categories.map(cat => `<option value="${cat}" ${currentCategoryFilter === cat ? 'selected' : ''}>${cat}</option>`).join('')}
-                    </select>
-                    <select id="statusSelect">
-                        <option value="">Filter: All Status</option>
-                        ${FILTER_CONFIG.statuses.map(s => `<option value="${s}" ${currentStatusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
-                    </select>
-                    <div style="position: relative; display: inline-flex; gap: 2px;">
-                        <button id="exportPdfBtn" class="btn btn-secondary shadow-hover" style="padding: 0.5rem 0.85rem; font-size: 0.85rem;" title="Export filtered listings as PDF">
+
+                <div class="filters-toolbar" style="width: 100%; display: flex; justify-content: space-between; align-items: center; background: var(--bg-hover); padding: 0.75rem 1rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                        <select id="sortSelect" style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 0.4rem 0.75rem; font-size: 0.85rem; font-weight: 500;">
+                            ${FILTER_CONFIG.sortOptions.map(opt => `<option value="${opt.value}" ${currentSort === opt.value ? 'selected' : ''}>Sort: ${opt.label}</option>`).join('')}
+                        </select>
+                        <select id="typeSelect" style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 0.4rem 0.75rem; font-size: 0.85rem; font-weight: 500;">
+                            <option value="">All Types</option>
+                            ${FILTER_CONFIG.types.map(t => `<option value="${t}" ${currentTypeFilter === t ? 'selected' : ''}>${t}</option>`).join('')}
+                            <option value="Auction" ${currentTypeFilter === 'Auction' ? 'selected' : ''}>Auctions</option>
+                        </select>
+                        <select id="categorySelect" style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 0.4rem 0.75rem; font-size: 0.85rem; font-weight: 500;">
+                            <option value="">All Categories</option>
+                            ${FILTER_CONFIG.categories.map(cat => `<option value="${cat}" ${currentCategoryFilter === cat ? 'selected' : ''}>${cat}</option>`).join('')}
+                        </select>
+                        <select id="statusSelect" style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 0.4rem 0.75rem; font-size: 0.85rem; font-weight: 500;">
+                            <option value="">All Status</option>
+                            ${FILTER_CONFIG.statuses.map(s => `<option value="${s}" ${currentStatusFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
+                        </select>
+                    </div>
+
+                    <div style="display: flex; items-center; gap: 0.5rem;">
+                        <button id="exportPdfBtn" class="btn btn-secondary shadow-hover" style="height: 34px; padding: 0 0.85rem; font-size: 0.8rem; border-radius: var(--radius-md); display: flex; align-items: center; gap: 0.4rem;" title="Export filtered listings as PDF">
                             <i class="ph ph-file-pdf"></i> PDF
                         </button>
-                        <button id="exportCsvBtn" class="btn btn-secondary shadow-hover" style="padding: 0.5rem 0.85rem; font-size: 0.85rem;" title="Export filtered listings as CSV">
+                        <button id="exportCsvBtn" class="btn btn-secondary shadow-hover" style="height: 34px; padding: 0 0.85rem; font-size: 0.8rem; border-radius: var(--radius-md); display: flex; align-items: center; gap: 0.4rem;" title="Export filtered listings as CSV">
                             <i class="ph ph-file-csv"></i> CSV
                         </button>
                     </div>
@@ -3109,7 +3152,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderMessages(targetInquiryId = null) {
+    async function renderMessages(targetInquiryId = null) {
+        const { renderMessages: externalRenderMessages } = await loadMessaging();
         externalRenderMessages({
             currentUser,
             EstatoStorage,
@@ -4430,7 +4474,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (prop) {
             const title = `${prop.title} | Estato V12.1`;
-            const desc = `${prop.type} in ${prop.city} - ${prop.bhk} BHK, ${prop.area} sqft. ${prop.description.substring(0, 100)}...`;
+            const propDesc = prop.description || '';
+            const desc = `${prop.type} in ${prop.city} - ${prop.bhk} BHK, ${prop.area} sqft. ${propDesc.substring(0, 100)}${propDesc.length > 100 ? '...' : ''}`;
             
             document.title = title;
             if (metaDesc) metaDesc.setAttribute('content', desc);
