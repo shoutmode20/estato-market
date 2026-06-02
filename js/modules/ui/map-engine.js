@@ -79,7 +79,14 @@ export function updateMapMarkers(properties, filterCity, radiusCenter, radiusKm,
     if (!_map) return;
 
     if (_mapLayerGroup) _map.removeLayer(_mapLayerGroup);
-    _mapLayerGroup = L.layerGroup().addTo(_map);
+    _mapLayerGroup = (typeof L.markerClusterGroup === 'function') 
+        ? L.markerClusterGroup({
+            chunkedLoading: true,
+            maxClusterRadius: 50,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false
+          }).addTo(_map)
+        : L.layerGroup().addTo(_map);
     _markers = [];
 
     const bounds = [];

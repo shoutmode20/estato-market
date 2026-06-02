@@ -1,5 +1,5 @@
 import { EstatoStorage } from './services/storage.js';
-import { escapeHtml, showToast, showConfirm, debounce } from './ui/utils.js';
+import { escapeHtml, showToast, showConfirm, debounce, loadScript } from './ui/utils.js';
 import { State, updateState } from './core/state.js';
 import {
     initMap, destroyMap, updateMapMarkers, toggleMapView, getIsMapVisible,
@@ -124,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.showToast = showToast;
     window.showConfirm = showConfirm;
+    window.loadScript = loadScript;
 
     window.viewMyListings = function() {
         if (!currentUser) return;
@@ -740,6 +741,14 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Initializing App flow...");
         setupAuthListeners();
 
+        // 0. INSTANT UI HYDRATION
+        // Load data from persistent cache first so the UI can render immediately
+        const cachedUser = await EstatoStorage.checkAuth();
+        if (cachedUser) {
+            console.log("[Estato] Hydrating UI instantly from cache...");
+            checkAuth();
+        }
+
         // 1. Initialize GIS & Drive Engine
         try {
             await EstatoStorage.initDrive(updateSyncBadge);
@@ -753,13 +762,13 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const ok = await EstatoStorage.loginWithGoogle(null, true); // silent = true
             if (ok) {
-                checkAuth();
+                if (!cachedUser) checkAuth();
                 return;
             }
         } catch(e) {}
 
         // 3. Fallback to Guest Mode instead of login screen
-        checkAuth();
+        if (!cachedUser) checkAuth();
     }
 
     // --- AUTHENTICATION ENGINE ---
@@ -1369,13 +1378,16 @@ document.addEventListener('DOMContentLoaded', () => {
             priceModal.classList.add('active');
 
             // Wait for modal transition to finish before rendering chart
-            setTimeout(() => {
+            setTimeout(async () => {
+                if (!window.Chart) {
+                    await window.loadScript('https://cdn.jsdelivr.net/npm/chart.js');
+                }
                 const ctx = document.getElementById('priceTrendChart').getContext('2d');
                 const history = prop.priceHistory || [{ price: prop.price, date: prop.date || new Date().toISOString() }];
                 
                 if (priceTrendChart) priceTrendChart.destroy();
 
-                priceTrendChart = new Chart(ctx, {
+                priceTrendChart = new window.Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: history.map(h => new Date(h.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
@@ -2013,8 +2025,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Views ---
-    function renderDashboard() {
+    async function renderDashboard() {
         const viewContainer = document.getElementById('viewContainer');
+        if (!window.Chart) {
+            await window.loadScript('https://cdn.jsdelivr.net/npm/chart.js');
+        }
         externalRenderDashboard({
             currentUser, EstatoStorage, viewContainer, dashboardCharts, currencyFormatter,
             generatePropertyCard, Chart: window.Chart, attachCardListeners,
@@ -3227,10 +3242,20 @@ document.addEventListener('DOMContentLoaded', () => {
         URL.revokeObjectURL(url);
     }
 
-    function exportToPDF(properties) {
+    async function exportToPDF(properties) {
         if (!properties || properties.length === 0) {
             showToast('No properties to export.', 'info');
             return;
+        }
+
+        if (!window.jspdf) {
+            try {
+                await window.loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+                await window.loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js');
+            } catch (e) {
+                showToast('Failed to load PDF library.', 'danger');
+                return;
+            }
         }
 
         const { jsPDF } = window.jspdf;
@@ -4319,6 +4344,12 @@ document.addEventListener('DOMContentLoaded', () => {
         
         document.body.appendChild(flyerDiv);
         try {
+            if (!window.html2canvas) {
+                await window.loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+            }
+            if (!window.jspdf) {
+                await window.loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+            }
             const canvas = await window.html2canvas(flyerDiv, { scale: 2, useCORS: true });
             const imgData = canvas.toDataURL('image/jpeg', 0.95);
             const { jsPDF } = window.jspdf;

@@ -419,8 +419,8 @@ export const EstatoStorage = {
             _globalListenersActive = true;
             console.log("[Estato Firebase] Initializing Global Real-time Listeners...");
 
-            // Latest 100 Properties — increased from 20 to prevent seller listings vanishing
-            _trackListener(db.ref('properties').limitToLast(100), (snap) => {
+            // Latest 20 Properties — paginated, remaining fetched on-demand
+            _trackListener(db.ref('properties').limitToLast(20), (snap) => {
                 const data = snap.val();
                 const latestBatch = data ? Object.values(data) : [];
                 self.mergeProperties(latestBatch);
@@ -579,8 +579,11 @@ export const EstatoStorage = {
         _initializedUid = null;
         _initializedRole = null;
 
+        localStorage.removeItem('estato_currentUser_v12');
+        localStorage.removeItem('estato_cache_v12');
+
         _setState({ currentUser: null });
-        auth.signOut();
+        if (auth) auth.signOut();
     },
 
     getData() { return _memCache; },

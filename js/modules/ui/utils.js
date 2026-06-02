@@ -3,6 +3,17 @@
  * Extracted from monolithic app.v12.js for isolated modularity & testing.
  */
 
+export function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) return resolve();
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+}
+
 export function debounce(func, wait) {
     let timeout;
     return function(...args) {
