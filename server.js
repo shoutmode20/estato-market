@@ -593,8 +593,8 @@ app.use('/api', (req, res) => {
 // Static Local Hosting
 // ---------------------------------------------------------
 
-// Serve all static files from this root directory
-app.use(express.static(path.join(__dirname, '.'), {
+// Serve all static files from the public/ production directory
+app.use(express.static(path.join(__dirname, 'public'), {
     index: false,
     setHeaders: (res, filePath) => {
         // Short-term caching — safe without URL-based cache busting
@@ -701,7 +701,7 @@ function buildPrerenderedBlock(prop, propId, host) {
 // ---------------------------------------------------------
 app.get('/property/:id', async (req, res) => {
     const propId = req.params.id;
-    const indexPath = path.join(__dirname, 'index.html');
+    const indexPath = path.join(__dirname, 'public', 'index.html');
 
     // Skip SSR for accidental static file requests (manifest.json, sw.js etc.)
     if (propId.includes('.') || propId.includes('#') || propId.includes('[')) {
