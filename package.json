@@ -3,10 +3,10 @@
   "version": "12.1.0",
   "description": "Estato — Premium Real Estate Marketplace powered by Firebase",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "set NODE_ENV=production && node server.js",
+    "dev": "set NODE_ENV=development && node server.js",
     "build": "node build.js",
-    "vercel-build": "node build.js",
+    "vercel-build": "set NODE_ENV=production && node build.js",
     "test": "jest --env=jsdom"
   },
   "keywords": [

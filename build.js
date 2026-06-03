@@ -22,7 +22,7 @@ if (!fs.existsSync(distDir)) {
 
     try {
         await esbuild.build({
-            entryPoints: ['js/modules/main.js'],
+            entryPoints: ['src/js/modules/main.js'],
             bundle: true,
             minify: true,
             sourcemap: false,
@@ -46,11 +46,10 @@ if (!fs.existsSync(distDir)) {
         }
 
         const filesToCopy = ['index.html', 'manifest.json', 'sw.js', 'robots.txt'];
-        const dirsToCopy = ['css', 'assets', 'dist'];
-
         for (const file of filesToCopy) {
-            if (fs.existsSync(path.join(__dirname, file))) {
-                fs.copyFileSync(path.join(__dirname, file), path.join(publicDir, file));
+            const srcPath = path.join(__dirname, 'src', file);
+            if (fs.existsSync(srcPath)) {
+                fs.copyFileSync(srcPath, path.join(publicDir, file));
             }
         }
 
@@ -69,15 +68,18 @@ if (!fs.existsSync(distDir)) {
             }
         }
 
-        for (const dir of dirsToCopy) {
-            copyDirRecursive(path.join(__dirname, dir), path.join(publicDir, dir));
-        }
+        // Copy source directories from src/
+        copyDirRecursive(path.join(__dirname, 'src/css'), path.join(publicDir, 'css'));
+        copyDirRecursive(path.join(__dirname, 'src/assets'), path.join(publicDir, 'assets'));
+        
+        // Copy build artifacts from root dist/
+        copyDirRecursive(path.join(__dirname, 'dist'), path.join(publicDir, 'dist'));
 
         // Explicitly only copy config.js (do not expose raw js modules)
         const publicJsDir = path.join(publicDir, 'js');
         if (!fs.existsSync(publicJsDir)) fs.mkdirSync(publicJsDir, { recursive: true });
-        if (fs.existsSync(path.join(__dirname, 'js/config.js'))) {
-            fs.copyFileSync(path.join(__dirname, 'js/config.js'), path.join(publicJsDir, 'config.js'));
+        if (fs.existsSync(path.join(__dirname, 'src/js/config.js'))) {
+            fs.copyFileSync(path.join(__dirname, 'src/js/config.js'), path.join(publicJsDir, 'config.js'));
         }
 
         // Overwrite public/index.html to use the code-split ESM production build

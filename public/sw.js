@@ -10,17 +10,23 @@ const ASSETS = [
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js',
     'https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js',
+    './dist/auctions-4RRNQDJN.js',
     './dist/auctions-5U2BI5PZ.js',
     './dist/bundle.min.js',
+    './dist/chunk-2MERNS36.js',
     './dist/chunk-3U76E3KB.js',
+    './dist/chunk-CJCWXQLW.js',
     './dist/chunk-JEB5J5IO.js',
     './dist/chunk-NKL2SMM4.js',
     './dist/chunk-WD42TXT6.js',
     './dist/crm-3AMSNQE2.js',
+    './dist/crm-ROKXHH35.js',
     './dist/crm-SIBPFJFC.js',
     './dist/crm-YETSDAY6.js',
+    './dist/dashboard-64DS4RBA.js',
     './dist/dashboard-H4HIVRPR.js',
     './dist/main.js',
+    './dist/messaging-GRJ4K56R.js',
     './dist/messaging-SPBI5MS2.js'
 ];
 
