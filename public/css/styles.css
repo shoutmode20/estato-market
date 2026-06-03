@@ -20,14 +20,17 @@
     --radius-lg: 16px;
     --radius-md: 12px;
     --radius-sm: 8px;
-    --transition: 0.2s ease;
+    --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --easing-premium: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+    --spring: cubic-bezier(0.68, -0.6, 0.32, 1.6);
     
     --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.05);
     --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
     --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.12);
-    --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+    --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.12);
     
-    --surface-glass: rgba(255, 255, 255, 0.85);
+    --surface-glass: rgba(255, 255, 255, 0.75);
     --glass-border: 1px solid rgba(255, 255, 255, 0.3);
     
     --overlay-start: rgba(253, 251, 247, 0.85);
@@ -130,6 +133,26 @@ body {
 
 .hidden {
     display: none !important;
+}
+
+@keyframes shimmer {
+    0%   { background-position: -468px 0; }
+    100% { background-position: 468px 0; }
+}
+
+.shimmer-base {
+    background: #f6f7f8;
+    background-image: linear-gradient(to right, #f6f7f8 0%, #edeef1 20%, #f6f7f8 40%, #f6f7f8 100%);
+    background-repeat: no-repeat;
+    background-size: 800px 104px;
+    display: inline-block;
+    position: relative;
+    animation: shimmer 1.2s linear infinite forwards;
+}
+
+body.dark-mode .shimmer-base {
+    background: #1e293b;
+    background-image: linear-gradient(to right, #1e293b 0%, #334155 20%, #1e293b 40%, #1e293b 100%);
 }
 
 .nav-badge {
@@ -489,18 +512,29 @@ body {
 .map-price-marker {
     background: var(--primary);
     color: white;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-weight: 700;
-    font-size: 0.85rem;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-weight: 800;
+    font-size: 0.9rem;
     box-shadow: var(--shadow-md);
     border: 2px solid white;
     white-space: nowrap;
+    width: max-content;
+    height: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     position: relative;
+    transform: translate(-50%, -100%); /* Center and point at bottom */
     cursor: pointer;
-    transition: var(--transition);
+    transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    margin-top: -8px; /* Offset for pointer */
 }
-.map-price-marker:hover { transform: scale(1.1); background: var(--text-main); }
+.map-price-marker:hover { 
+    transform: translate(-50%, -105%) scale(1.1); 
+    background: var(--text-main); 
+    z-index: 1000;
+}
 .map-price-marker::after {
     content: '';
     position: absolute;
@@ -578,8 +612,17 @@ body {
     padding: 1.5rem;
     padding-bottom: 1rem;
     border-right: 1px solid var(--border-color);
-    z-index: 10;
+    background: var(--surface-glass);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 100;
     overflow: hidden; /* clip outer; inner scrolls */
+    animation: slideInRight 0.6s var(--easing-premium) backwards;
+}
+
+@keyframes slideInRight {
+    from { transform: translateX(30px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
 }
 
 .logo {
@@ -665,11 +708,15 @@ body {
     justify-content: space-between;
     align-items: center;
     gap: 1.5rem;
-    padding: 1rem 2rem;
+    padding: 1.25rem 2rem;
     border-bottom: 1px solid var(--border-color);
+    background: var(--surface-glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     position: sticky;
     top: 0;
-    z-index: 5;
+    z-index: 90;
+    transition: all 0.3s ease;
 }
 
 .search-bar {
@@ -900,27 +947,26 @@ body {
 .property-card {
     display: flex;
     flex-direction: column;
-    background: var(--surface-glass);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border: var(--glass-border);
-    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
     overflow: hidden;
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    box-shadow: var(--shadow-glass);
-    opacity: 0;
-    animation: slideUpFade 0.5s ease-out forwards;
+    transition: all 0.4s var(--easing-premium);
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    cursor: pointer;
+    animation: scaleUp 0.5s var(--easing-premium) backwards;
 }
 
-@keyframes slideUpFade {
-    0% { opacity: 0; transform: translateY(20px) scale(0.98); }
-    100% { opacity: 1; transform: translateY(0) scale(1); }
+@keyframes scaleUp {
+    from { transform: scale(0.95); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
 }
 
 .property-card:hover {
-    transform: translateY(-6px) scale(1.01);
+    transform: translateY(-8px) scale(1.02);
     box-shadow: var(--shadow-lg);
-    border-color: rgba(220, 88, 42, 0.3); /* Subtle primary tint on border */
+    border-color: var(--primary);
 }
 
 .card-img {
@@ -928,6 +974,14 @@ body {
     background: var(--bg-main);
     position: relative;
     overflow: hidden;
+}
+
+.card-img img {
+    transition: transform 0.6s var(--easing-smooth);
+}
+
+.property-card:hover .card-img img {
+    transform: scale(1.1);
 }
 
 /* Multi-Image Swipe Carousel V9 */

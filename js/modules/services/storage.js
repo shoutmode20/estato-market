@@ -400,8 +400,15 @@ export const EstatoStorage = {
             if (_syncCallback) _syncCallback('synced');
             return true;
         } catch (e) {
-            console.warn('[Estato Firebase] Auth Flow interrupted:', e.message);
-            if (_syncCallback) _syncCallback('error');
+            // Only trigger a visible 'error' badge if it's a REAL failure during a non-silent login.
+            // Quietly handle 'no_session' or transient network flutters during boot silent-checks.
+            if (!silent && e.message !== 'no_session') {
+                console.warn('[Estato Firebase] Auth Flow interrupted:', e.message);
+                if (_syncCallback) _syncCallback('error');
+            } else {
+                // For silent checks/handshakes, just revert to 'synced' (neutral) state
+                if (_syncCallback) _syncCallback('synced'); 
+            }
             throw e;
         }
     },
@@ -862,11 +869,19 @@ export const EstatoStorage = {
         if (index === -1) favorites.push(id);
         else favorites.splice(index, 1);
 
-        // 1. memCache + localStorage
+        // 1. memCache + localStorage — immediate (optimistic, no badge shown)
         _setState({ favorites });
 
-        // 2. Cloud
-        _queueCloudWrite('favorites/' + _memCache.currentUser.id, { ids: favorites });
+        // 2. Cloud — direct write to the user-specific path.
+        // We intentionally do NOT use _queueCloudWrite (which batches via
+        // db.ref('/').update()) because the Firebase rules for favorites/uid
+        // require $uid === auth.uid, which the root-level multi-path update fails.
+        // This write is fire-and-forget, silent — the realtime listener will
+        // reconcile the state if it fails.
+        if (db && _memCache.currentUser) {
+            db.ref('favorites/' + _memCache.currentUser.id).set({ ids: favorites })
+              .catch(e => console.warn('[Storage] Favorites cloud sync failed (non-critical):', e.message));
+        }
     },
 
     // ── Cities / CRM ──

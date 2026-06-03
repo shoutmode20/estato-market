@@ -97,14 +97,18 @@ export function updateMapMarkers(properties, filterCity, radiusCenter, radiusKm,
         if (!lat || !lng) return;
 
         const priceStr = p.price >= 10000000
-            ? (p.price / 10000000).toFixed(1) + 'Cr'
-            : (p.price / 100000).toFixed(0) + 'L';
+            ? (p.price / 10000000).toFixed(1).replace('.0', '') + 'Cr'
+            : p.price >= 100000
+                ? (p.price / 100000).toFixed(1).replace('.0', '') + 'L'
+                : p.price >= 1000
+                    ? (p.price / 1000).toFixed(1).replace('.0', '') + 'K'
+                    : p.price.toString();
 
         const icon = L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="map-price-marker">${escapeHtml(priceStr)}</div>`,
-            iconSize: [60, 30],
-            iconAnchor: [30, 30]
+            iconSize: null, // Let CSS grow the box
+            iconAnchor: [0, 0] // We will handle centering via CSS
         });
 
         const marker = L.marker([lat, lng], { icon });
@@ -390,11 +394,16 @@ async function updateDetailsPois(lat, lng) {
     }
 }
 
+// Simple session cache for POIs to prevent redundant slow API calls
+const _poiCache = new Map();
+
 async function fetchNearbyPOIs(lat, lng) {
-    const radius = 2500; // 2.5km search
-    // Overpass QL for Education, Healthcare, Transit, and Malls
+    const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+    if (_poiCache.has(cacheKey)) return _poiCache.get(cacheKey);
+
+    const radius = 1500; // Optimized 1.5km radius for faster data retrieval
     const query = `
-        [out:json][timeout:25];
+        [out:json][timeout:10];
         (
           node["amenity"~"school|college|university|kindergarten"](around:${radius},${lat},${lng});
           node["amenity"~"hospital|clinic|doctors"](around:${radius},${lat},${lng});
@@ -403,36 +412,45 @@ async function fetchNearbyPOIs(lat, lng) {
           node["shop"~"mall|supermarket"](around:${radius},${lat},${lng});
           node["amenity"="marketplace"](around:${radius},${lat},${lng});
         );
-        out body;
+        out center qt;
     `;
 
     const endpoints = [
         'https://overpass-api.de/api/interpreter',
         'https://lz4.overpass-api.de/api/interpreter',
-        'https://z.overpass-api.de/api/interpreter'
+        'https://z.overpass-api.de/api/interpreter',
+        'https://overpass.kumi.systems/api/interpreter',
+        'https://overpass.osm.ch/api/interpreter',
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
     ];
 
-    let res = null;
-    for (const url of endpoints) {
-        try {
-            res = await fetch(`${url}?data=${encodeURIComponent(query)}`);
-            if (res.ok) break;
-            console.warn(`[MapEngine] Overpass instance rate-limited: ${url}`);
-        } catch (e) {
-            console.warn(`[MapEngine] Overpass instance failed: ${url}`);
-        }
+    // Race the endpoints to get the fastest responding server
+    const fastFetch = async (url) => {
+        const response = await fetch(`${url}?data=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error('Endpoint busy');
+        return response.json();
+    };
+
+    let data;
+    try {
+        // Use Promise.any to take the first successful response from any instance
+        data = await Promise.any(endpoints.map(url => fastFetch(url)));
+    } catch (e) {
+        console.error('[MapEngine] All POI endpoints failed, trying fallback...', e);
+        // Fallback to sequential if Promise.any (ES2021) isn't supported or all fail
+        throw new Error('All Overpass API instances failed');
     }
-
-    if (!res || !res.ok) throw new Error('All Overpass API instances failed or rate-limited');
     
-    const data = await res.json();
     const results = data.elements || [];
-
     const grouped = { school: [], hospital: [], transit: [], shopping: [] };
 
     results.forEach(el => {
-        const dist = calculateDistance(lat, lng, el.lat, el.lon);
-        const item = { name: el.tags.name, lat: el.lat, lon: el.lon, distance: dist };
+        const itemLat = el.lat || (el.center ? el.center.lat : null);
+        const itemLon = el.lon || (el.center ? el.center.lon : null);
+        if (!itemLat || !itemLon) return;
+
+        const dist = calculateDistance(lat, lng, itemLat, itemLon);
+        const item = { name: el.tags.name, lat: itemLat, lon: itemLon, distance: dist };
 
         if (el.tags.amenity && /school|college|university|kindergarten/.test(el.tags.amenity)) grouped.school.push(item);
         else if (el.tags.amenity && /hospital|clinic|doctors/.test(el.tags.amenity)) grouped.hospital.push(item);
@@ -440,9 +458,10 @@ async function fetchNearbyPOIs(lat, lng) {
         else if (el.tags.shop || el.tags.amenity === 'marketplace') grouped.shopping.push(item);
     });
 
-    // Sort by proximity
     Object.keys(grouped).forEach(k => grouped[k].sort((a, b) => a.distance - b.distance));
     
+    // Store in cache for current session
+    _poiCache.set(cacheKey, grouped);
     return grouped;
 }
 

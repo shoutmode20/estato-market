@@ -83,6 +83,36 @@ document.addEventListener('DOMContentLoaded', () => {
     let _compareRestored = false;
     let _renderDistanceMap = new Map();
 
+    // --- Live Alerts (Browser Notifications) ---
+    let _lastInquiryCount = -1;
+    let _lastNotificationCount = -1;
+
+    async function requestNotificationPermission() {
+        if (!("Notification" in window) || currentUser?.role === 'Guest') return;
+        if (Notification.permission === "default") {
+            try {
+                const status = await Notification.requestPermission();
+                if (status === 'granted') console.log("[Estato] Notifications enabled.");
+            } catch(e) {}
+        }
+    }
+
+    function sendLiveAlert(title, body) {
+        if (Notification.permission !== "granted") return;
+        try {
+            const n = new Notification(title, {
+                body: body,
+                icon: '/assets/icons/icon-192.png',
+                badge: '/assets/icons/icon-192.png',
+                tag: 'estato-alert'
+            });
+            n.onclick = () => { window.focus(); n.close(); };
+        } catch(e) {
+            // Mobile browsers sometimes only allow notifications via service worker
+            console.warn("Native Notification failed, falling back to Service Worker if possible", e);
+        }
+    }
+
     // --- CRITICAL: Register global stubs early ---
     // These are referenced in dynamically-rendered HTML onclick attributes.
     // They MUST be on window before renderView() is called, which happens in checkAuth() at line ~452.
@@ -106,10 +136,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             compareList.push(prop);
-            showToast(`"${prop.title.substring(0, 25)}" added to compare.`, 'success');
         } else {
             compareList.splice(index, 1);
-            showToast(`"${prop.title.substring(0, 25)}" removed from compare.`, 'info');
         }
         _updateCompareTray();
         _syncCompareIcons();
@@ -741,6 +769,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function initApp() {
         console.log("Initializing App flow...");
         setupAuthListeners();
+        requestNotificationPermission(); // Request permission early for Live Alerts
 
         try {
             // 0. INSTANT UI HYDRATION
@@ -924,9 +953,49 @@ document.addEventListener('DOMContentLoaded', () => {
             // The debounce collapses rapid simultaneous DB events into one render pass.
             if (!storageSubscribed) {
                 storageSubscribed = true;
+
+                // Track last-known favorites to detect fav-only changes
+                let _lastFavSnapshot = JSON.stringify(EstatoStorage.getFavorites() || []);
+                let _lastPropsSnapshot = JSON.stringify((EstatoStorage.getProperties() || []).map(p => p.id));
+
+                /**
+                 * Surgically update only heart-icon states in the currently rendered DOM
+                 * without triggering a full grid re-render (and therefore no scroll jump).
+                 */
+                function _syncFavIconsOnly() {
+                    const favs = EstatoStorage.getFavorites();
+                    document.querySelectorAll('.fav-btn[data-id]').forEach(btn => {
+                        const id = btn.getAttribute('data-id');
+                        const isFav = favs.includes(id);
+                        btn.classList.toggle('active', isFav);
+                        const icon = btn.querySelector('i');
+                        if (icon) icon.className = isFav ? 'ph-fill ph-heart' : 'ph ph-heart';
+                        btn.setAttribute('aria-label', isFav ? 'Remove from My Properties' : 'Save to My Properties');
+                    });
+                    // Also sync watchlist badge / sidebar count
+                    updateSidebarBadges();
+                }
+
                 const _debouncedGlobalUpdate = debounce(() => {
                     console.log("[Estato] Global real-time sync triggered.");
-                    
+
+                    // Detect what actually changed this tick
+                    const currentFavSnapshot = JSON.stringify(EstatoStorage.getFavorites() || []);
+                    const currentPropsSnapshot = JSON.stringify((EstatoStorage.getProperties() || []).map(p => p.id));
+                    const favsChanged = currentFavSnapshot !== _lastFavSnapshot;
+                    const propsChanged = currentPropsSnapshot !== _lastPropsSnapshot;
+                    _lastFavSnapshot = currentFavSnapshot;
+                    _lastPropsSnapshot = currentPropsSnapshot;
+
+                    // If absolutely nothing changed, skip all work entirely.
+                    // This handles the Firebase listener echo: after toggleFavorite does a
+                    // direct db.ref.set(), the Firebase .on('value') listener fires again
+                    // with the same data — we must treat that as a true no-op.
+                    if (!favsChanged && !propsChanged) {
+                        console.log('[Estato] No-op sync tick — data unchanged, skipping.');
+                        return;
+                    }
+
                     // 1. App-wide state sync
                     const updatedUser = EstatoStorage.getCurrentUser();
                     if (updatedUser) {
@@ -952,11 +1021,17 @@ document.addEventListener('DOMContentLoaded', () => {
                                 updateCompareTray();
                             }
                         }
-                        
-                        renderView(currentView, searchInput ? searchInput.value : '');
-                        renderNotifications();
-                        updateSidebarBadges();
-                        updateSeoMetadata();
+
+                        if (favsChanged && !propsChanged) {
+                            // Surgical update: just flip heart icons, no DOM rebuild, no scroll jump
+                            console.log('[Estato] Fav-only change detected — skipping full re-render.');
+                            _syncFavIconsOnly();
+                        } else {
+                            renderView(currentView, searchInput ? searchInput.value : '', true);
+                            renderNotifications();
+                            updateSidebarBadges();
+                            updateSeoMetadata();
+                        }
                     } else {
                         // Modal is open: only sync badges and notifications, don't rebuild grid
                         renderNotifications();
@@ -965,6 +1040,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     // Check for newly matched saved searches after data sync
                     checkSavedSearchAlerts();
+
+                    // --- Live Alert Detection ---
+                    if (currentUser && Notification.permission === 'granted') {
+                        // 1. Check for New Inquiries
+                        const inquiries = EstatoStorage.getInquiries((currentUser.role === 'Seller' || currentUser.role === 'Broker' || currentUser.role === 'Admin') ? currentUser.id : null);
+                        const currentInqCount = inquiries.filter(inq => inq.status === 'Unread').length;
+                        if (_lastInquiryCount !== -1 && currentInqCount > _lastInquiryCount) {
+                            const latest = inquiries[inquiries.length - 1];
+                            sendLiveAlert("New Inquiry Received", `You have a new message regarding "${latest.propertyTitle}"`);
+                        }
+                        _lastInquiryCount = currentInqCount;
+
+                        // 2. Check for General Notifications
+                        const notifs = EstatoStorage.getNotifications();
+                        if (_lastNotificationCount !== -1 && notifs.length > _lastNotificationCount) {
+                            const latest = notifs[notifs.length - 1];
+                            sendLiveAlert("Estato Update", latest.text);
+                        }
+                        _lastNotificationCount = notifs.length;
+                    }
                     
                     // History API Routing: Open property if URL path is /property/:id
                     // Guard: Only open if no modal is currently active to prevent constant reloading on sync
@@ -978,6 +1073,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 }, 150);
+
                 
                 EstatoStorage.subscribe(_debouncedGlobalUpdate);
             }
@@ -1826,9 +1922,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // --- Core Rendering Engine ---
-    function renderView(viewName, searchQuery = '') {
+    async function renderView(viewName, searchQuery = '', skipScroll = false) {
         currentView = viewName;
-        window.scrollTo(0, 0);
+        const mainContent = document.querySelector('.main-content');
+        const oldScrollTop = mainContent ? mainContent.scrollTop : 0;
 
         // Clean up Leaflet map instance when navigating away from properties
         // (the DOM node will be destroyed, so we must destroy the map object too)
@@ -1853,27 +1950,51 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentUser) {
             const role = currentUser.role;
             if (role === 'Buyer' && (viewName === 'dashboard' || viewName === 'cities' || viewName === 'crm')) {
-                renderProperties(); 
+                renderProperties();
+                // Scroll to top after render
+                requestAnimationFrame(() => { if (mainContent) mainContent.scrollTop = 0; });
                 return;
             }
             if (role === 'Seller' && viewName === 'crm') {
                 renderDashboard();
+                requestAnimationFrame(() => { if (mainContent) mainContent.scrollTop = 0; });
                 return;
             }
         }
 
-        switch(viewName) {
-            case 'dashboard': renderDashboard(); break;
-            case 'cities': renderCities(); break;
-            case 'messages': renderMessages(); break;
-            case 'crm': loadCRM().then(m => m.renderCRM(viewContainer)); break;
-            case 'properties': renderProperties(currentFilterCity, searchQuery); break;
-            case 'watchlist': renderSavedProperties(); break;
-            case 'auctions': renderAuctions(); break;
-            case 'profile': renderProfile(); break;
-            case 'audit-logs': renderAuditLogs(); break;
-            default: renderProperties();
-        }
+        // The viewContainer is already cleared above, so mainContent.scrollTop is
+        // naturally 0. For silent re-renders (skipScroll=true), we must wait 
+        // for the view to finish rendering (especially if async like Dashboard)
+        // before restoring the scroll position.
+        const renderTask = (async () => {
+            switch(viewName) {
+                case 'dashboard': await renderDashboard(); break;
+                case 'cities': renderCities(); break;
+                case 'messages': renderMessages(); break;
+                case 'crm': await loadCRM().then(m => m.renderCRM(viewContainer)); break;
+                case 'properties': renderProperties(currentFilterCity, searchQuery); break;
+                case 'watchlist': renderSavedProperties(); break;
+                case 'auctions': await renderAuctions(); break;
+                case 'profile': renderProfile(); break;
+                case 'audit-logs': await renderAuditLogs(); break;
+                default: renderProperties();
+            }
+        })();
+
+        // Apply scroll AFTER the render task completes
+        renderTask.then(() => {
+            requestAnimationFrame(() => {
+                if (!mainContent) return;
+                if (skipScroll) {
+                    mainContent.scrollTop = oldScrollTop;
+                } else {
+                    mainContent.scrollTop = 0;
+                    window.scrollTo(0, 0);
+                }
+            });
+        });
+
+
     }
 
     // --- Admin Audit Logs View ---
@@ -2176,6 +2297,34 @@ document.addEventListener('DOMContentLoaded', () => {
         if (doRender) renderView('properties', searchInput ? searchInput.value : '');
     };
 
+    function renderSkeletonGrid() {
+        const viewContainer = document.getElementById('viewContainer');
+        const skeletonCount = 6;
+        let skeletons = '';
+        for (let i = 0; i < skeletonCount; i++) {
+            skeletons += `
+                <div class="property-card" style="pointer-events: none;">
+                    <div class="card-img shimmer-base" style="height: 200px;"></div>
+                    <div class="property-card-content" style="gap: 1rem;">
+                        <div class="shimmer-base" style="width: 40%; height: 24px; border-radius: 4px;"></div>
+                        <div class="shimmer-base" style="width: 80%; height: 16px; border-radius: 4px;"></div>
+                        <div class="shimmer-base" style="width: 60%; height: 16px; border-radius: 4px;"></div>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                            <div class="shimmer-base" style="width: 32px; height: 32px; border-radius: 50%;"></div>
+                            <div class="shimmer-base" style="width: 32px; height: 32px; border-radius: 50%;"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        viewContainer.innerHTML = `
+            <div class="section-header">
+                <div class="shimmer-base" style="width: 300px; height: 32px; border-radius: 8px;"></div>
+            </div>
+            <div class="properties-grid">${skeletons}</div>
+        `;
+    }
+
     function renderProperties(cityFilter = null, searchQuery = '') {
         let properties = EstatoStorage.getProperties();
 
@@ -2361,6 +2510,14 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         if (properties.length === 0) {
+            // If it's a first-run with no data, show skeletons to indicate loading
+            const isFirstLoad = !window._estatoHydrated;
+            if (isFirstLoad && !searchQuery && !cityFilter) {
+                renderSkeletonGrid();
+                window._estatoHydrated = true; // Only show once per session
+                return;
+            }
+
             html += `
                 <div class="empty-state" style="grid-column: 1 / -1; padding: 4rem 2rem;">
                     <i class="ph-duotone ph-magnifying-glass" style="font-size: 4rem; color: var(--text-muted); opacity: 0.5;"></i>
@@ -3450,12 +3607,19 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (!lat || !lng) return;
 
-            const priceStr = p.price >= 10000000 ? (p.price/10000000).toFixed(1) + 'Cr' : (p.price/100000).toFixed(0) + 'L';
+            const priceStr = p.price >= 10000000
+                ? (p.price / 10000000).toFixed(1).replace('.0', '') + 'Cr'
+                : p.price >= 100000
+                    ? (p.price / 100000).toFixed(1).replace('.0', '') + 'L'
+                    : p.price >= 1000
+                        ? (p.price / 1000).toFixed(1).replace('.0', '') + 'K'
+                        : p.price.toString();
+
             const icon = L.divIcon({
                 className: 'custom-div-icon',
                 html: `<div class="map-price-marker">${priceStr}</div>`,
-                iconSize: [60, 30],
-                iconAnchor: [30, 30]
+                iconSize: null,
+                iconAnchor: [0, 0]
             });
  
             const marker = L.marker([lat, lng], { icon });
@@ -3915,11 +4079,10 @@ document.addEventListener('DOMContentLoaded', () => {
             favBtn.addEventListener('click', (e) => {
                 if (!currentUser) { loginScreen.classList.remove('hidden'); window.closePropertyDetailsModal(); return; }
                 EstatoStorage.toggleFavorite(prop.id);
-                const isNowFav = EstatoStorage.getFavorites().includes(prop.id);
-                favBtn.classList.toggle('active', isNowFav);
-                favBtn.querySelector('i').className = isNowFav ? 'ph-fill ph-heart' : 'ph ph-heart';
-                renderView(currentView, searchInput.value); // Re-render background grid silently
+                // Note: The global subscription in main.js handles syncing the icon state
+                // across the app (including the background grid) surgically.
             });
+
         }
         
         const shareBtn = footerBtns.querySelector('.share-btn');
@@ -4067,6 +4230,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         parent.querySelectorAll('.fav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 if (!currentUser) { loginScreen.classList.remove('hidden'); return; }
                 const id = e.currentTarget.getAttribute('data-id');
@@ -4084,6 +4248,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         parent.querySelectorAll('.compare-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
+                e.preventDefault();
                 const id = e.currentTarget.getAttribute('data-id');
                 toggleCompare(id, e);
             });
@@ -4529,4 +4694,5 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.updateSeoMetadata = updateSeoMetadata;
+    window.requestNotificationPermission = requestNotificationPermission;
 });

@@ -130,7 +130,7 @@ export function generatePropertyCard(prop, { currentUser, compareList, favorites
     const meta = PROPERTY_METADATA[prop.category];
 
     return `
-        <div class="property-card" style="animation-delay: ${index * 0.05}s" onclick="window.dispatchCardClick('${escapeHtml(prop.id)}')">
+        <div class="property-card" style="animation-delay: ${index * 0.08}s" onclick="window.dispatchCardClick('${escapeHtml(prop.id)}')">
             <div class="card-img">
                 ${carouselHTML}
                 <div class="badges">
